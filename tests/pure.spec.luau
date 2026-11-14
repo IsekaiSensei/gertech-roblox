@@ -1,6 +1,7 @@
 -- Offline tests for engine-free modules (TETRAFORGE board, rules, session; data defs).
 -- Run: bash tests/run.sh  (needs the `luau` CLI). The runner rewrites script.Parent requires.
 
+local ForgeFeed = require("./build/ForgeFeed")
 local ForgeRules = require("./build/ForgeRules")
 local ForgeSession = require("./build/ForgeSession")
 local ItemDefs = require("./build/ItemDefs")
@@ -318,15 +319,210 @@ check(
 check("tetris count", sq.result.stats.tetrises == 2)
 print(string.format("  (randomized runs: %d, quota met in %d)", runs, quota))
 
+---------------------------------------------------------------- whole-stock hopper feed
+-- Fake shared workshop: `stock` is the unreserved shared stock; reserve/topUp move material
+-- into the session's hopper atomically (as WorkshopInventoryService does).
+local function fakeWorkshop(stock)
+	local w = { stock = table.clone(stock) }
+	function w.amount(k)
+		return w.stock[k] or 0
+	end
+	function w.take(want)
+		local granted = {}
+		for k, n in want do
+			local t = math.min(w.stock[k] or 0, n)
+			w.stock[k] -= t
+			granted[k] = t
+		end
+		return granted
+	end
+	return w
+end
+
+local function hopperSession(stock, seed, instant)
+	local w = fakeWorkshop(stock)
+	local initial = w.take(ForgeRules.HOPPER_TARGET)
+	local feed = ForgeFeed.hopper(initial, w.amount)
+	local sim = ForgeSession.new({
+		feed = feed,
+		enableAlloy = feed:remaining("pure_component", 0) >= ForgeRules.ALLOY_ENABLE_THRESHOLD,
+	}, lcg(seed))
+	local function service()
+		-- what ForgeService.maybeTopUp does, with an instantly-landing atomic write
+		local want = feed:wants(sim.materialSpent, if sim.waitingFeed then sim.pendingMaterials else nil)
+		if want and instant then
+			feed:credit(w.take(want))
+		end
+	end
+	return sim, feed, w, service
+end
+
+-- Parity: with the same RNG, inputs and total stock, a hopper-fed run plays exactly like
+-- Godot's whole-stock budget (same pieces, materials, board, score, outputs).
+local parityRuns = 0
+for seed = 1, 60 do
+	local stock = { ore = 300 + seed * 3, salvage = 140 + seed, pure_component = 40 + seed % 7 }
+	local godot = newSession(stock, seed)
+	local sim, feed, w, service = hopperSession(stock, seed, true)
+	local d1, d2 = lcg(seed * 31), lcg(seed * 31)
+	godot:start()
+	sim:start()
+	service()
+	local guard, inSync = 0, true
+	while not godot.finished and guard < 3000 do
+		guard += 1
+		for _, pair in { { godot, d1 }, { sim, d2 } } do
+			local s, d = pair[1], pair[2]
+			local act = d:NextInteger(1, 10)
+			if act <= 2 then
+				s:moveLeft()
+			elseif act <= 4 then
+				s:moveRight()
+			elseif act == 5 then
+				s:rotate()
+			elseif act == 6 then
+				s:hold()
+			else
+				s:hardDrop()
+			end
+			s:update(0.05)
+		end
+		service()
+		check("never waits with an instant hopper " .. seed, not sim.waitingFeed)
+		if sim.activeShape ~= godot.activeShape or sim.score ~= godot.score then
+			inSync = false
+		end
+		-- conservation: shared + hopper(unspent) + spent == initial stock, per kind
+		for _, k in ForgeRules.FEED_MATERIALS do
+			local spent = sim.materialSpent[k]
+			if w.stock[k] + feed:left(k, spent) + spent ~= stock[k] then
+				inSync = false
+				check("conservation " .. seed .. k, false)
+			end
+			if w.stock[k] < 0 or feed:left(k, spent) < 0 then
+				check("never negative " .. seed .. k, false)
+			end
+		end
+	end
+	parityRuns += 1
+	check("parity in sync " .. seed, inSync and sim.finished == godot.finished)
+	check("parity board " .. seed, sim.grid:encode(ForgeRules.CODES) == godot.grid:encode(ForgeRules.CODES))
+	check("parity reason " .. seed, sim.result.reason == godot.result.reason)
+	check("parity score " .. seed, sim.result.score == godot.result.score)
+	for k, n in godot.result.materialsProduced do
+		check("parity output " .. seed .. k, sim.result.materialsProduced[k] == n)
+	end
+	-- settlement: hopper refund goes back, spent is gone, nothing duplicated
+	local refund = feed:refund(sim.result.materialsConsumed)
+	for _, k in ForgeRules.FEED_MATERIALS do
+		check(
+			"settle restores unspent " .. seed .. k,
+			w.stock[k] + refund[k] == stock[k] - sim.result.materialsConsumed[k]
+		)
+		check(
+			"hopper never above target+piece " .. seed .. k,
+			feed:left(k, sim.materialSpent[k]) <= ForgeRules.HOPPER_TARGET[k] + 4
+		)
+	end
+end
+check("ran parity runs", parityRuns == 60)
+
+-- Whole stock: with a huge shared stock and the quota disabled, a run keeps drawing far past
+-- the old 120/56/16 cap and the hopper never holds more than its target.
+do
+	local stock = { ore = 2000, salvage = 2000, pure_component = 400 }
+	local w = fakeWorkshop(stock)
+	local feed = ForgeFeed.hopper(w.take(ForgeRules.HOPPER_TARGET), w.amount)
+	local sim = ForgeSession.new({ feed = feed, enableAlloy = true, targetLines = 100000 }, lcg(99))
+	sim:start()
+	local maxHeld, guard = 0, 0
+	while not sim.finished and guard < 20000 do
+		guard += 1
+		-- clear the chamber so the run does not top out: we only test feed flow here
+		for y = 0, 19 do
+			for x = 0, 9 do
+				sim.grid:set(x, y, "")
+			end
+		end
+		sim:hardDrop()
+		sim:update(0.05)
+		local want = feed:wants(sim.materialSpent, if sim.waitingFeed then sim.pendingMaterials else nil)
+		if want then
+			feed:credit(w.take(want))
+		end
+		local held = 0
+		for _, k in ForgeRules.FEED_MATERIALS do
+			held += feed:left(k, sim.materialSpent[k])
+		end
+		maxHeld = math.max(maxHeld, held)
+	end
+	local spent = sim.materialSpent
+	check("whole stock: hoppers empty at the end", sim.status == "INPUT HOPPERS EMPTY")
+	check("whole stock: spent far beyond the old cap", spent.ore + spent.salvage > 3000)
+	check(
+		"whole stock: base stock exhausted (<4 left of each)",
+		w.stock.ore + feed:left("ore", spent.ore) < 4
+			and w.stock.salvage + feed:left("salvage", spent.salvage) < 4
+	)
+	check(
+		"whole stock: hopper never above target total",
+		maxHeld
+			<= ForgeRules.HOPPER_TARGET.ore
+				+ ForgeRules.HOPPER_TARGET.salvage
+				+ ForgeRules.HOPPER_TARGET.pure_component
+	)
+	for _, k in ForgeRules.FEED_MATERIALS do
+		check("whole stock: conserved " .. k, w.stock[k] + feed:left(k, spent[k]) + spent[k] == stock[k])
+	end
+end
+
+-- Slow top-up: a piece whose cells are not in the hopper waits (no lock, no RNG drawn,
+-- no input accepted) and spawns when the top-up lands.
+do
+	local w = fakeWorkshop({ ore = 100, salvage = 0, pure_component = 0 })
+	local feed = ForgeFeed.hopper(w.take({ ore = 4 }), w.amount)
+	local sim = ForgeSession.new({ feed = feed, enableAlloy = false }, lcg(5))
+	sim:start()
+	check("first piece spawned from hopper", sim.activeShape ~= "" and not sim.waitingFeed)
+	sim:hardDrop()
+	check("next piece waits for feed", sim.waitingFeed and sim.status == "FEED HOPPER REFILLING")
+	check("waiting: no active cells", #sim:activeCells() == 0)
+	check("waiting: inputs ignored", not sim:moveLeft())
+	local nextShape = sim.nextShape
+	sim:update(1)
+	sim:update(1)
+	check("waiting persists without top-up", sim.waitingFeed and sim.piecesLocked == 1)
+	local want = feed:wants(sim.materialSpent, sim.pendingMaterials)
+	check("wants a top-up", want ~= nil and (want.ore or 0) >= 4)
+	feed:credit(w.take(want :: any))
+	sim:update(0.01)
+	check("spawns after top-up", not sim.waitingFeed and sim.activeShape == nextShape)
+	-- another player drains the shared stock: the run ends cleanly, nothing lost
+	w.stock.ore = 0
+	local guard = 0
+	while not sim.finished and guard < 200 do
+		guard += 1
+		sim:hardDrop()
+		sim:update(0.05)
+	end
+	check("drained stock ends run", sim.finished and sim.result.reason == "INPUT HOPPERS EMPTY")
+	local refund = feed:refund(sim.result.materialsConsumed)
+	check(
+		"drained: spent + refund = hopper total",
+		sim.result.materialsConsumed.ore + refund.ore == feed.reserved.ore
+	)
+end
+
 ---------------------------------------------------------------- data defs
 check("starter ore", ItemDefs.STARTER_STOCK.ore == 120)
 check("starter salvage", ItemDefs.STARTER_STOCK.salvage == 56)
 check("starter pure", ItemDefs.STARTER_STOCK.pure_component == 16)
 check(
-	"reservation cap = Godot starter stock",
-	ForgeRules.RESERVATION_CAP.ore == 120
-		and ForgeRules.RESERVATION_CAP.salvage == 56
-		and ForgeRules.RESERVATION_CAP.pure_component == 16
+	"hopper target covers at least one piece of each kind",
+	ForgeRules.HOPPER_TARGET.ore >= 4
+		and ForgeRules.HOPPER_TARGET.salvage >= 4
+		and ForgeRules.HOPPER_TARGET.pure_component >= 2
+		and ForgeRules.HOPPER_LOW.ore < ForgeRules.HOPPER_TARGET.ore
 )
 check(
 	"visor upgrade cost",

@@ -33,8 +33,10 @@ export type WorkshopData = {
 	lattice: { string }, -- module type per socket; "core" at 1, "empty" when free
 	foundryRuns: number,
 	log: { any },
-	-- TETRAFORGE feed reserved by live sessions: refunded/converted on settle, or fully
-	-- refunded by any server once the owning server stops heart-beating (crash safety).
+	-- TETRAFORGE feed hoppers of live sessions. `budget` is the CUMULATIVE amount moved out of
+	-- the shared stock for the run (initial fill + every top-up). Settled once (unspent
+	-- refunded + products granted), or fully refunded by any server once the owning server
+	-- stops heart-beating (crash safety: a crashed run produced nothing, so it costs nothing).
 	reservations: { [string]: Reservation },
 }
 
@@ -327,8 +329,10 @@ function Service.add(items: { [string]: number }, _actor: string)
 end
 
 --[[
-	Atomically reserve TETRAFORGE feed for a session. Takes min(stock, cap) of each feed
-	material out of the shared stock and records the reservation in the same write.
+	Atomically open a TETRAFORGE feed hopper for a session. Takes min(stock, cap) of each
+	feed material out of the shared stock and records the reservation in the same write.
+	`caps` is the hopper fill target, not a run limit: the run keeps drawing from the whole
+	stock through topUpFeed.
 	Returns (ok, budget | reason).
 ]]
 function Service.reserveFeed(
@@ -364,6 +368,48 @@ function Service.reserveFeed(
 		return false, reason
 	end
 	return true, budget
+end
+
+--[[
+	Atomically top up a live hopper: move min(stock, want) of each material out of the shared
+	stock and add it to the session's reservation in the same write. Fails without touching
+	anything if the reservation is gone (refunded as abandoned).
+	Returns (ok, granted | reason). reason: "missing" (session must end) or "store" (retry).
+]]
+function Service.topUpFeed(sessionId: string, want: { [string]: number }): (boolean, any)
+	for k, n in want do
+		if not ItemDefs.isValid(k) or type(n) ~= "number" or n < 0 or n ~= math.floor(n) then
+			return false, "bad request"
+		end
+	end
+	local granted: { [string]: number } = {}
+	local missing = false
+	local ok = Service.transact("forge_topup", function(d)
+		granted, missing = {}, false
+		local r = d.reservations[sessionId]
+		if r == nil then
+			missing = true
+			return false, "missing"
+		end
+		for k, n in want do
+			local take = math.min(d.inventory[k] or 0, n)
+			if take > 0 then
+				d.inventory[k] -= take
+				r.budget[k] = (r.budget[k] or 0) + take
+				granted[k] = take
+			end
+		end
+		r.t = os.time()
+		return true, nil
+	end)
+	if ok then
+		return true, granted
+	end
+	if missing then
+		localReservations[sessionId] = nil
+		return false, "missing"
+	end
+	return false, "store"
 end
 
 --[[

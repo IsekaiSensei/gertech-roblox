@@ -309,7 +309,8 @@ function ForgeView.new(gui: ScreenGui)
 	local function fmtHopper(name: string, key: string): string
 		local spent = snap and snap.spent and snap.spent[key] or 0
 		local budget = snap and snap.budget and snap.budget[key] or 0
-		return string.format("%s  <b>%d / %d</b>", name, spent, budget)
+		local hopper = snap and snap.hopper and snap.hopper[key] or 0
+		return string.format("%s  <b>%d / %d</b>  (hopper %d)", name, spent, budget, hopper)
 	end
 
 	local function renderAll()
@@ -321,7 +322,7 @@ function ForgeView.new(gui: ScreenGui)
 		end
 		if mode == "idle" and (not snap or snap.finished) then
 			subtitle.Text =
-				"Chamber free. Starting reserves feed from the shared workshop stock (up to 120 ore, 56 salvage, 16 pure)."
+				"Chamber free. A run draws on the whole shared workshop stock; only a small feed hopper is held out at a time."
 		elseif mode == "watch" then
 			subtitle.Text = "Watching " .. (snap and snap.operatorName or "the forge") .. " — read-only."
 		elseif isOp then
@@ -337,7 +338,7 @@ function ForgeView.new(gui: ScreenGui)
 			return
 		end
 		left.Text = string.format(
-			"<b>INPUT HOPPERS</b>\n%s\n%s\n%s\n\nSCORE  <b>%06d</b>\nROWS  <b>%d / %d</b>",
+			"<b>INPUT HOPPERS</b>  used / available\n%s\n%s\n%s\n\nSCORE  <b>%06d</b>\nROWS  <b>%d / %d</b>",
 			fmtHopper("ORE", "ore"),
 			fmtHopper("SALVAGE", "salvage"),
 			fmtHopper("PURE", "pure_component"),

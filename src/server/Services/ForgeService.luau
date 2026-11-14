@@ -3,10 +3,15 @@
 -- Forge Foundry). The server owns the board, the piece RNG and the gravity tick
 -- (ForgeSession). Clients only send input intents and render snapshots.
 --
--- Material safety
---   start   : feed is reserved from the shared workshop stock atomically (reserveFeed),
---             recorded in the workshop record together with the deduction.
---   end     : unspent feed is refunded and products are granted in ONE atomic write that
+-- Material safety (the run may use the WHOLE shared stock, like Godot)
+--   start   : a small feed hopper (ForgeRules.HOPPER_TARGET) is reserved from the shared
+--             stock atomically (reserveFeed), recorded together with the deduction.
+--   play    : pieces are chosen from hopper + unreserved shared stock (Godot's whole-stock
+--             view) and spend their 4 cells on lock from the hopper only. As the hopper runs
+--             low it is topped up atomically (topUpFeed); a piece whose cells are not in the
+--             hopper yet waits ("FEED HOPPER REFILLING"). Everything outside the hopper stays
+--             spendable by other players / stations and keeps receiving gathered material.
+--   end     : unspent hopper is refunded and products are granted in ONE atomic write that
 --             also deletes the reservation (settleReservation). Leave and shutdown end the run
 --             first, then settle the same way.
 --   crash   : the reservation stops heart-beating and any server refunds it in full.
@@ -18,6 +23,7 @@ local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage.Shared
 local Config = require(Shared.Config)
+local ForgeFeed = require(Shared.ForgeFeed)
 local ForgeRules = require(Shared.ForgeRules)
 local ForgeSession = require(Shared.ForgeSession)
 local ItemDefs = require(Shared.ItemDefs)
@@ -31,8 +37,10 @@ local RateLimiter = require(script.Parent.RateLimiter)
 type Live = {
 	id: string,
 	player: Player,
-	sim: ForgeSession.Session,
-	budget: { [string]: number },
+	sim: ForgeSession.Instance,
+	feed: ForgeFeed.Hopper,
+	toppingUp: boolean,
+	lastTopUp: number,
 	pausedAt: number?,
 	sentVersion: number,
 	sentAt: number,
@@ -108,6 +116,15 @@ local function sessionCount(): number
 	return n
 end
 
+local function available(s: Live): { [string]: number }
+	local out = {}
+	for _, k in ForgeRules.FEED_MATERIALS do
+		local spent = s.sim.materialSpent[k] or 0
+		out[k] = spent + s.feed:remaining(k, spent)
+	end
+	return out
+end
+
 local function snapshot(s: Live): any
 	local sim = s.sim
 	local cells = {}
@@ -141,7 +158,8 @@ local function snapshot(s: Live): any
 		lines = sim.linesCleared,
 		target = sim.targetLines,
 		heat = sim.heat,
-		budget = s.budget,
+		budget = available(s), -- spent + still available (hopper + shared stock)
+		hopper = s.feed:refund(sim.materialSpent),
 		spent = sim.materialSpent,
 		produced = sim.materialProduced,
 		status = sim.status,
@@ -233,14 +251,14 @@ local function settle(s: Live, blocking: boolean)
 	end
 	broadcast(s) -- final board to operator + watchers
 	local result = sim.result :: ForgeSession.Result
-	local refund = sim:refund()
 	local produced = {}
 	for k, n in result.materialsProduced do
 		if n > 0 then
 			produced[k] = n
 		end
 	end
-	local details = {
+	local refund: { [string]: number } = {}
+	local details: any = {
 		session = s.id,
 		operator = s.player.UserId,
 		reason = result.reason,
@@ -251,6 +269,13 @@ local function settle(s: Live, blocking: boolean)
 		stats = result.stats,
 	}
 	local function run()
+		-- A top-up in flight changes the hopper total: settle only after it landed.
+		while s.toppingUp do
+			task.wait()
+		end
+		refund = s.feed:refund(result.materialsConsumed)
+		details.refunded = refund
+		details.hopperTotal = table.clone(s.feed.reserved)
 		local ok, reason = false, nil
 		for attempt = 1, 12 do
 			ok, reason = Inventory.settleReservation(s.id, refund, produced, details)
@@ -320,7 +345,7 @@ local function startSession(player: Player)
 	starting[player] = true
 	local id = HttpService:GenerateGUID(false)
 	local ok, budgetOrReason =
-		Inventory.reserveFeed(id, player.UserId, ForgeRules.RESERVATION_CAP, ForgeRules.BASE_MATERIALS)
+		Inventory.reserveFeed(id, player.UserId, ForgeRules.HOPPER_TARGET, ForgeRules.BASE_MATERIALS)
 	starting[player] = nil
 	if not ok then
 		return notify(player, tostring(budgetOrReason), "bad")
@@ -331,18 +356,21 @@ local function startSession(player: Player)
 		Inventory.settleReservation(id, budget, {}, { session = id, reason = "CANCELLED BEFORE START" })
 		return
 	end
-	local sim = ForgeSession.new({
-		inputs = budget,
-		-- CANON: enable_alloy = pure_component >= 4 (of the stock handed to the run)
-		enableAlloy = (budget.pure_component or 0) >= ForgeRules.ALLOY_ENABLE_THRESHOLD,
+	local feed = ForgeFeed.hopper(budget, Inventory.amount)
+	local sim: ForgeSession.Instance = ForgeSession.new({
+		feed = feed,
+		-- CANON: enable_alloy = pure_component >= 4 of the whole stock at run start
+		enableAlloy = feed:remaining("pure_component", 0) >= ForgeRules.ALLOY_ENABLE_THRESHOLD,
 		targetLines = ForgeRules.TARGET_LINES,
 		gravitySeconds = ForgeRules.GRAVITY_SECONDS,
-	}, Random.new() :: any)
+	}, Random.new() :: any) :: any
 	local s: Live = {
 		id = id,
 		player = player,
 		sim = sim,
-		budget = budget,
+		feed = feed,
+		toppingUp = false,
+		lastTopUp = os.clock(),
 		pausedAt = nil,
 		sentVersion = -1,
 		sentAt = 0,
@@ -355,16 +383,46 @@ local function startSession(player: Player)
 	notify(
 		player,
 		string.format(
-			"Feed stock accepted: %d ore, %d salvage, %d pure reserved from the workshop.",
-			budget.ore or 0,
-			budget.salvage or 0,
-			budget.pure_component or 0
+			"Feed line open: the run draws on the whole workshop stock (%d ore, %d salvage, %d pure). Unspent feed returns when it ends.",
+			feed:remaining("ore", 0),
+			feed:remaining("salvage", 0),
+			feed:remaining("pure_component", 0)
 		),
 		"info"
 	)
 	if sim.finished then
 		settle(s, false)
 	end
+end
+
+-- Atomic hopper top-up from Workshop_Global (runs in its own thread; one at a time).
+local function maybeTopUp(s: Live)
+	if s.toppingUp or s.settling or s.sim.finished then
+		return
+	end
+	local sim = s.sim
+	local waiting = if sim.waitingFeed then sim.pendingMaterials else nil
+	local minGap = if waiting then Config.FORGE_TOPUP_RETRY_SECONDS else Config.FORGE_TOPUP_MIN_INTERVAL
+	if os.clock() - s.lastTopUp < minGap then
+		return
+	end
+	local want = s.feed:wants(sim.materialSpent, waiting)
+	if not want then
+		return
+	end
+	s.toppingUp = true
+	s.lastTopUp = os.clock()
+	task.spawn(function()
+		local ok, grantedOrReason = Inventory.topUpFeed(s.id, want)
+		if ok then
+			s.feed:credit(grantedOrReason)
+		elseif grantedOrReason == "missing" and not sim.finished then
+			-- Another server refunded this run as abandoned: it can no longer spend anything.
+			sim:finish("FEED LINE LOST")
+		end
+		s.lastTopUp = os.clock()
+		s.toppingUp = false
+	end)
 end
 
 local function onInput(player: Player, intent: any)
@@ -446,6 +504,7 @@ local function step(dt: number)
 			sim:finish("OPERATOR LEFT THE CONSOLE")
 		end
 		sim:update(dt)
+		maybeTopUp(s)
 		if sim.finished then
 			settle(s, false)
 		elseif
@@ -484,7 +543,6 @@ function ForgeService.bindStation(
 		end
 		Remotes.event("OpenForge"):FireClient(player, {
 			mode = mode,
-			caps = ForgeRules.RESERVATION_CAP,
 			operatorName = if current then current.player.DisplayName else nil,
 		})
 		if mine then
