@@ -20,12 +20,16 @@ Config.DATASTORE_RETRIES = 5
 Config.STATION_MAX_DISTANCE = 16 -- studs; server rejects requests from farther away
 Config.GATHER_MAX_DISTANCE = 14
 
--- Godot forge_foundry.gd: target_lines = 8 (output quota per run)
-Config.FORGE_MAX_ROWS_PER_RUN = 8
--- Godot tetromino_grid: 10-wide chamber -> one row = 10 material cells
-Config.FORGE_ROW_WIDTH = 10
--- PLACEHOLDER: seconds per row in the timer-based adaptation (Godot is a live Tetris run)
-Config.FORGE_SECONDS_PER_ROW = 3
-Config.FORGE_MAX_CONCURRENT_JOBS = 4 -- PLACEHOLDER: operators at one console
+-- TETRAFORGE session (Roblox adaptation knobs; game rules live in ForgeRules)
+Config.FORGE_MAX_SESSIONS_PER_STATION = 1 -- one chamber, like Godot; others watch
+Config.FORGE_PAUSE_MAX_SECONDS = 30 -- PLACEHOLDER: shared station, so pauses auto-resume
+Config.FORGE_SNAPSHOT_MIN_INTERVAL = 0.05 -- max 20 board snapshots / s per session
+Config.FORGE_WATCH_DISTANCE = 60 -- studs; watchers farther away are dropped
+Config.FORGE_INPUT_BURST = 30 -- input intents rate limit (token bucket)
+Config.FORGE_INPUT_PER_SECOND = 20
+Config.FORGE_OPERATOR_MAX_DISTANCE = 40 -- operator walking off ends the run
+
+-- Reservations older than this (no heartbeat from the owning server) are refunded in full.
+Config.RESERVATION_STALE_SECONDS = 300
 
 return Config

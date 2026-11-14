@@ -33,7 +33,12 @@ export type WorkshopData = {
 	lattice: { string }, -- module type per socket; "core" at 1, "empty" when free
 	foundryRuns: number,
 	log: { any },
+	-- TETRAFORGE feed reserved by live sessions: refunded/converted on settle, or fully
+	-- refunded by any server once the owning server stops heart-beating (crash safety).
+	reservations: { [string]: Reservation },
 }
+
+export type Reservation = { budget: { [string]: number }, jobId: string, owner: number, t: number }
 
 local Service = {}
 
@@ -42,6 +47,8 @@ local workshopId = Config.DEFAULT_WORKSHOP_ID
 local confirmed: WorkshopData
 local pending: { [string]: number } = {}
 local busy = false
+local localReservations: { [string]: boolean } = {}
+local RESERVATION_STALE_SECONDS = Config.RESERVATION_STALE_SECONDS
 local changedCallbacks: { () -> () } = {}
 
 local function defaultData(): WorkshopData
@@ -55,6 +62,7 @@ local function defaultData(): WorkshopData
 		lattice = lattice,
 		foundryRuns = 0,
 		log = {},
+		reservations = {},
 	}
 end
 
@@ -89,6 +97,24 @@ local function reconcile(raw: any): WorkshopData
 		d.lattice[1] = "core"
 	end
 	d.foundryRuns = tonumber(raw.foundryRuns) or 0
+	if type(raw.reservations) == "table" then
+		for id, r in raw.reservations do
+			if type(id) == "string" and type(r) == "table" and type(r.budget) == "table" then
+				local budget = {}
+				for k, n in r.budget do
+					if ItemDefs.isValid(k) and tonumber(n) then
+						budget[k] = math.max(0, math.floor(tonumber(n) :: number))
+					end
+				end
+				d.reservations[id] = {
+					budget = budget,
+					jobId = tostring(r.jobId),
+					owner = tonumber(r.owner) or 0,
+					t = tonumber(r.t) or 0,
+				}
+			end
+		end
+	end
 	if type(raw.log) == "table" then
 		d.log = table.clone(raw.log)
 	end
@@ -202,6 +228,24 @@ function Service.transact(label: string, mutate: ((WorkshopData) -> (boolean, st
 			for k, n in applying do
 				d.inventory[k] = math.max(0, (d.inventory[k] or 0) + n)
 			end
+			-- Heartbeat our live reservations; refund abandoned ones from crashed servers.
+			local now = os.time()
+			for id, r in d.reservations do
+				if localReservations[id] then
+					r.t = now
+				elseif now - r.t > RESERVATION_STALE_SECONDS then
+					for k, n in r.budget do
+						d.inventory[k] = (d.inventory[k] or 0) + n
+					end
+					d.reservations[id] = nil
+					table.insert(d.log, {
+						t = now,
+						kind = "reservation_expired",
+						actor = "workshop",
+						details = { session = id, refunded = r.budget },
+					})
+				end
+			end
 			accepted, reason = true, nil
 			if mutate then
 				accepted, reason = mutate(d)
@@ -282,6 +326,89 @@ function Service.add(items: { [string]: number }, _actor: string)
 	broadcastToClients()
 end
 
+--[[
+	Atomically reserve TETRAFORGE feed for a session. Takes min(stock, cap) of each feed
+	material out of the shared stock and records the reservation in the same write.
+	Returns (ok, budget | reason).
+]]
+function Service.reserveFeed(
+	sessionId: string,
+	owner: number,
+	caps: { [string]: number },
+	baseMaterials: { string }
+): (boolean, any)
+	local budget: { [string]: number } = {}
+	localReservations[sessionId] = true -- heartbeat it from the very first write
+	local ok, reason = Service.transact("forge_reserve", function(d)
+		budget = {}
+		for k, cap in caps do
+			budget[k] = math.min(d.inventory[k] or 0, cap)
+		end
+		local feedable = false
+		for _, k in baseMaterials do
+			if (budget[k] or 0) >= 4 then
+				feedable = true
+			end
+		end
+		if not feedable then
+			return false, "TETRAFORGE hoppers empty: needs at least 4 Ore or 4 Salvage in the workshop."
+		end
+		for k, n in budget do
+			d.inventory[k] -= n
+		end
+		d.reservations[sessionId] = { budget = budget, jobId = game.JobId, owner = owner, t = os.time() }
+		return true, nil
+	end)
+	if not ok then
+		localReservations[sessionId] = nil
+		return false, reason
+	end
+	return true, budget
+end
+
+--[[
+	Settle a reservation: return the unspent feed plus the run's products in ONE write and
+	delete the reservation. If the reservation is gone (another server already refunded it
+	as abandoned), nothing is granted, so materials are never duplicated.
+	Returns (ok, reason). ok=false with reason "store" means retry later.
+]]
+function Service.settleReservation(
+	sessionId: string,
+	refund: { [string]: number },
+	produced: { [string]: number },
+	details: any
+): (boolean, string?)
+	local missing = false
+	local ok, reason = Service.transact("forge_receipt", function(d)
+		missing = false
+		if d.reservations[sessionId] == nil then
+			missing = true
+			return false, "reservation already refunded"
+		end
+		for k, n in refund do
+			d.inventory[k] = (d.inventory[k] or 0) + n
+		end
+		for k, n in produced do
+			d.inventory[k] = (d.inventory[k] or 0) + n
+		end
+		d.reservations[sessionId] = nil
+		d.foundryRuns += 1
+		table.insert(
+			d.log,
+			{ t = os.time(), kind = "minigame_receipt", actor = "tetraforge", details = details }
+		)
+		while #d.log > MAX_LOG do
+			table.remove(d.log, 1)
+		end
+		return true, nil
+	end)
+	if ok or missing then
+		localReservations[sessionId] = nil
+		return ok, reason
+	end
+	return false, "store"
+end
+
 function Service.flush(): boolean
 	local hasPending = next(pending) ~= nil
 	if not hasPending then
@@ -333,8 +460,8 @@ function Service.start()
 	task.spawn(function()
 		while true do
 			task.wait(Config.WORKSHOP_FLUSH_SECONDS)
-			if next(pending) ~= nil then
-				Service.flush()
+			if next(pending) ~= nil or next(localReservations) ~= nil then
+				Service.transact("heartbeat", nil)
 			elseif #Players:GetPlayers() > 0 then
 				refreshFromStore() -- fallback sync in case a message was dropped
 			end

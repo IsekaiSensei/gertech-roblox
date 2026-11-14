@@ -9,12 +9,13 @@ local Remotes = {}
 local EVENTS = {
 	"InventoryUpdated", -- S->C (inventory, equipment, flags)
 	"ProgressionUpdated", -- S->C (xp, level, unlocked)
-	"ForgeState", -- S->C (job state for this player)
-	"OpenForge", -- S->C
+	"ForgeBoard", -- S->C (TETRAFORGE board snapshot, role)
+	"OpenForge", -- S->C (mode: idle | operator | watch)
 	"OpenExchange", -- S->C
 	"Notify", -- S->C (text, kind)
-	"StartCraft", -- C->S (recipeId, rows)
-	"CancelCraft", -- C->S
+	"ForgeStart", -- C->S start a TETRAFORGE run
+	"ForgeInput", -- C->S input intent string
+	"ForgeWatch", -- C->S true/false
 	"BuyUpgrade", -- C->S (upgradeId)
 }
 
