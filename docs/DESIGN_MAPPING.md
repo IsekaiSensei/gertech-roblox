@@ -54,6 +54,18 @@ Labels: **CANON** means copied exactly from the Godot code. **ADAPTED** means th
 | No XP / levels in Godot | — | Per-player XP: forge score × 0.1, +2 per gather, +5 per socket. Level gates were removed with the row recipes, so a level unlocks nothing yet. | **PLACEHOLDER** (pending Ryan) |
 | Audio: none in the build | — | `AudioDefs` slots: workshop + electronics bed, healing/ASMR tone layer (Ryan, 2026-11-14) | PLACEHOLDER ids |
 
+## Provisional look pass (not canon)
+Ryan's shared reference images GERTECH_REF_01..14 (2026-11-14) set a common *look* for the Godot, Unity and Roblox versions. They are not Godot canon and they don't change any logic. The Roblox mapping, reference by reference, is in README → "Provisional look pass". In short:
+
+| Look element | Roblox | Status |
+|---|---|---|
+| Black space, star dust | Night sky with stars, Neon star-dust specks, dark roof glass, Bloom/ColorCorrection, Future lighting | PROVISIONAL (replaces the aqua tint while `Config.VISUAL_STYLE = "refs_2026_11_14"`) |
+| Polished gold and chrome, glowing cyan edges | Metal/Foil with reflectance; Neon rods, Highlight, Beams | PROVISIONAL |
+| Gold Platonic frames in crystal spheres | Rod-edge tetra/cube/octa/dodeca/icosa/star-tetra inside Glass + ForceField spheres | PROVISIONAL |
+| DNA wormhole helix as a torus of distortion with the helix inside | ForceField/crystal torus around the existing cyan helix; Platonic progression up its axis | PROVISIONAL look; the helix name and role are canon |
+| Fractal sphere clusters, Voronoi lattice, golden-spiral polyhedra chain | Procedural clusters, jittered-hex floor lattice, golden-spiral chain | PROVISIONAL |
+| Modular Crystal Block, elemental crystals, crystal-seed-to-android growth, nebula triangle module | Procedural stand-ins + image slots (flipbooks for REF_12/13) waiting for uploaded asset ids | PROVISIONAL (any lore these imply is undecided) |
+
 ## Explicitly not decided by canon (do not treat the Roblox choices as lore)
 - **What Tetris/TETRAFORGE "really does"** in the manufacturing chain is officially unsettled. That's Ryan's own note in the Nov 13 reconstruction. This port only reproduces what the Godot code already does: the falling-block forge turning feed into packed blocks, frames and blanks.
 - The station order ASTER-ORES → BREAKDOWN → BUBBLE SORT → TETRAFORGE → DOGIEPRESS → DIG DOG is a **candidate** path from the Nov 14 handoff, not an implemented chain.
