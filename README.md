@@ -1,6 +1,6 @@
 # GERTECH — Roblox (Luau)
 
-The Roblox build of Ryan's GERTECH multiplayer manufacturing game. You start in the **GERTECH Aqua Workshop hub**: gather raw feed at the intake docks, run it through the **TETRAFORGE** (the Tetris / Forge Foundry), and spend the output at the stock exchange and the WorldSeed lattice. Everyone on every server shares one **workshop inventory**. Your XP and unlocked recipes save between sessions.
+The Roblox build of Ryan's GERTECH multiplayer manufacturing game. You start in the **GERTECH Aqua Workshop hub**: gather raw feed at the intake docks, run it through the **TETRAFORGE** (the Tetris / Forge Foundry), and spend the output at the stock exchange and the WorldSeed lattice. Everyone on every server shares one **workshop inventory**. Your XP and level save between sessions.
 
 > **Source of truth:** the Godot project `GERTECH_Aqua_Workshop` (owned by the *Godot Continuity* bot,
 > mirrored at [`IsekaiSensei/to-world-open-crew/godot/GERTECH_Aqua_Workshop`](https://github.com/IsekaiSensei/to-world-open-crew/tree/main/godot/GERTECH_Aqua_Workshop)).
@@ -29,7 +29,7 @@ In Studio, create the matching instances and paste each file's source:
 | `src/server/HubBuilder.luau` | `ServerScriptService › Server` | ModuleScript |
 | `src/server/Services/*.luau` | `ServerScriptService › Server › Services` (Folder) | ModuleScript per file |
 | `src/client/Main.client.luau` | `StarterPlayer › StarterPlayerScripts › Client` (Folder) | **LocalScript** named `Main` |
-| `src/client/UI/Widgets.luau` | `…› Client › UI` (Folder) | ModuleScript |
+| `src/client/UI/Widgets.luau`, `src/client/UI/ForgeView.luau` | `…› Client › UI` (Folder) | ModuleScript per file |
 
 ### Saving data (DataStores)
 - **Published game:** saving works once the place is published.
@@ -37,13 +37,14 @@ In Studio, create the matching instances and paste each file's source:
 - Cross-server sync uses **MessagingService**, which only runs in live servers. In Studio, a single server works without it.
 
 ### Controls
-- **E / hold E** on prompts: operate the TETRAFORGE, gather, trade, place or recover lattice modules, use the helix pads.
+- **E / hold E** on prompts: operate or watch the TETRAFORGE, gather, trade, place or recover lattice modules, use the helix pads.
+- **In the TETRAFORGE** (same keys as Godot): **A/D** or **←/→** move · **W/↑/X** rotate · **S/↓** soft drop · **Space** hard drop · **C** hold · **P** pause · **Backspace** ends the run. Roblox reserves Esc for its own menu, so Backspace replaces Godot's Esc. On touch screens, use the on-screen buttons.
 - **I**: toggle the shared stock panel. **Esc**: close panels.
 
 ## What's in the hub
 | Station | What it does | Status |
 |---|---|---|
-| **TETRAFORGE** (operator console) | Pick a row composition and 1–8 rows. The server spends feed from the shared stock, runs a timer and returns the products. | Playable (timer adaptation of the Godot Tetris run) |
+| **TETRAFORGE** (operator console + 10×20 chamber) | The real falling-block forge, ported from Godot. Pieces are made from ore, salvage and pure components reserved from the shared stock. Cleared rows crystallize into packed blocks, stabilized frames and forged blanks. A run ends at 8 rows. Leftover cells ÷ 5 become scrap. One operator at a time; anyone can watch, either in the panel or on the in-world chamber. | Playable (server-simulated) |
 | Intake docks: **Dig Dog** ore seams, **Asteroids** salvage rocks, **Breakout** refined-parts bins | Hold to gather into the shared stock. Nodes deplete and regrow. | Playable (stand-in for minigames that aren't built yet) |
 | **Stock Exchange** | 4 Packed Blocks + 1 Forged Blank → workshop Visor Chip capacity +1 | Playable (canon) |
 | **WorldSeed lattice** (12 sockets, gold joints) | Place a Packed Block into a socket, or recover it 1:1. The core socket can't be recovered. | Playable (canon rules, placeholder size) |
@@ -60,7 +61,10 @@ Audio: `src/shared/AudioDefs.luau` has slots for workshop and electronics ambien
 ReplicatedStorage.Shared      (src/shared)   data + remotes, no game logic
   Config            tuning knobs
   ItemDefs          12 canon item keys + STARTER_STOCK (Godot world_seed.gd)
-  RecipeDefs        TETRAFORGE row recipes + validator for the Godot row rules, score, scrap
+  TetrominoGrid     port of Godot core/tetris/tetromino_grid.gd (10×20, 7 pieces, lock, line clears)
+  ForgeRules        Godot forge constants/formulas: materials, alloy, score, row outputs, scrap, gravity
+  ForgeSession      port of Godot theme_foundry/forge_foundry.gd game logic (engine-free, RNG injected)
+  RecipeDefs        non-forge recipes (visor chip upgrade)
   ProgressionDefs   PLACEHOLDER XP curve
   ResourceNodeDefs  intake-dock gatherables
   PlaceRegistry     universe places reached through the DNA wormhole helix
@@ -74,7 +78,7 @@ ServerScriptService.Server    (src/server)
     StoreUtil                 DataStore retries + in-memory fallback
     DataService               per-player profile: session-locked UpdateAsync, autosave, release on leave
     WorkshopInventoryService  SHARED stock: one key per workshop, atomic spends, batched adds, MessagingService sync
-    ForgeService              TETRAFORGE validation, timer, receipt, XP, abort → scrap
+    ForgeService              TETRAFORGE: server sim per session, input intents, snapshots, watchers, chamber mirror, reserve/settle
     GatherService             resource nodes
     ExchangeService           visor chip upgrade
     LatticeService            WorldSeed-lite sockets
@@ -84,10 +88,13 @@ ServerScriptService.Server    (src/server)
 
 StarterPlayerScripts.Client   (src/client)
   Main.client       ScreenGui: XP bar, shared stock, TETRAFORGE panel, exchange, toasts
+  UI/ForgeView      TETRAFORGE board ScreenGui: 10×20 grid, interpolated piece, next/hold, controls
   UI/Widgets        UI helpers
 ```
 
-**Server authority.** The client only displays state and sends `StartCraft(recipeId, rows)`, `CancelCraft()` and `BuyUpgrade(id)`. The server checks: argument types, that rows is a whole number from 1 to 8, that the recipe exists and the player has unlocked it, distance to the station, one job per player, the console job cap, the alloy threshold, and stock. Spends happen atomically inside `UpdateAsync`, so two players, or two servers, can't spend the same ore. Every remote and prompt is rate-limited.
+**Server authority.** The server owns the TETRAFORGE board, the piece RNG and the gravity tick, running `ForgeSession` on Heartbeat. The client sends only `ForgeStart()`, input intents through `ForgeInput(intent)` (`left`, `right`, `rotate`, `soft_on`/`soft_off`, `hard`, `hold`, `pause`/`resume`, `end`), `ForgeWatch(bool)` and `BuyUpgrade(id)`. Intents are whitelisted and rate-limited (30 burst, 20/s). Only the operator's intents count. The server sends board snapshots (a 200-character board string plus the active piece) at most 20 times a second to the operator and watchers. The client interpolates the falling piece between snapshots. Other server rules: one session per player and one chamber per station. A pause auto-resumes after 30 s. The run ends if the operator walks more than 40 studs from the console.
+
+**TETRAFORGE material safety.** Starting a run reserves feed in one atomic `UpdateAsync`: min(stock, cap) of ore, salvage and pure. The caps are 120/56/16, the Godot starter stock. The same write records the reservation inside the workshop. When the run ends, for any reason (quota, chamber full, hoppers empty, overflow, Backspace, leaving, walking off, server shutdown), one atomic write does three things: refunds the unspent feed (including the active piece, which isn't locked yet), adds the products and deletes the reservation. While a run is live, its server heartbeats the reservation every 20 s. If a server crashes, any other server refunds a reservation that hasn't been heartbeated for 5 minutes, in full. A late settle finds the reservation gone and grants nothing. Materials are never duplicated, and they're only lost if they were locked into a run that never settled. In that case the full refund returns them too.
 
 **Shared inventory concurrency.** Gathering and forge output pile up in a per-server `pending` delta, which is committed every 20 s or on the next transaction. Spends run the check and the subtraction inside `UpdateAsync`, against the freshest stored copy with the pending adds applied. After each commit the server publishes `{workshopId, revision}`, and other servers re-read. A periodic re-read covers dropped messages. If the store fails, pending adds are put back so nothing gathered is lost.
 
@@ -99,7 +106,7 @@ StarterPlayerScripts.Client   (src/client)
 - `stylua --check src`
 - `luau-compile` parses every file.
 - `luau-lsp analyze --definitions=globalTypes.d.luau --sourcemap=sourcemap.json src` (Roblox API types, sourcemap from `rojo sourcemap`): 0 type errors.
-- `./tests/run.sh`: offline tests for recipes, scoring, scrap, starter stock and the XP curve.
+- `bash tests/run.sh`: offline tests (2,938 checks). They cover the board port (shapes, rotation, fits, locking, single and four-row clears, overflow), Godot formulas (score, row outputs, scrap, gravity, alloy material choice), session behavior (spawn, gravity, hold, pause, hoppers-empty end, refunds), a scripted 8-row quota run, and 200 seeded random runs. The random runs check conservation, refund + spent = budget, and that the score matches the Godot formula.
 
 These are static checks plus engine-free tests. **This code hasn't been run in Roblox Studio yet.** The first Studio Play session is the next verification step.
 

@@ -20,17 +20,27 @@ Labels: **CANON** means copied exactly from the Godot code. **ADAPTED** means th
 | `equipment.visor_chip_capacity` = 1 | `world_seed.gd`, `inventory.gd` | `ItemDefs.STARTER_EQUIPMENT`, stored on the workshop | CANON |
 | `can_consume` / `apply_material_receipt` (reject if short, never negative, log the receipt) | `world_seed.gd` | `WorkshopInventoryService.consume/transact`: atomic in `UpdateAsync`, negative-stock guard, 50-entry event log | CANON rule, ADAPTED storage |
 | Save to `user://gertech_worldseed_v1.json` | `world_seed.gd` | DataStore `GERTECH_Workshops_v1`, plus per-player `GERTECH_Players_v1` | ADAPTED |
-| Tetris Forge Foundry run (10×20, 4 cells per piece, live play) | `forge_foundry.gd`, `tetromino_grid.gd` | **TETRAFORGE** station: pick a row composition and 1–8 rows, server timer at 3 s per row | ADAPTED (the live falling-block run isn't ported yet) |
-| Feed stock = ore / salvage / pure_component | `forge_foundry.gd`, `inventory.gd get_foundry_config` | Recipe inputs use only these three | CANON |
-| Alloy enabled only when pure_component ≥ 4 | `inventory.gd get_foundry_config` | `RecipeDefs.ALLOY_ENABLE_THRESHOLD`, checked by the server | CANON |
-| Alloy piece = 2 base + 2 pure | `forge_foundry.gd _choose_materials` | Alloy rows hold exactly 2 pure per row | CANON-derived |
-| Row cleared → 1 packed_block; ≥4 salvage → +stabilized_frame; ≥2 pure → +forged_blank | `forge_foundry.gd _lock_piece` | 4 row compositions in `RecipeDefs`, each checked at boot by `validateRowRules` | CANON rules; the compositions are ADAPTED |
-| Output quota `target_lines = 8` | `forge_foundry.gd` | `Config.FORGE_MAX_ROWS_PER_RUN = 8` | CANON |
-| Score = rows² × 100 per clear, +400 for 4 rows | `forge_foundry.gd` | `RecipeDefs.scoreForRows`, assuming the best-case 4-row clears | CANON formula, ADAPTED grouping |
-| Leftover chamber cells ÷ 5 → scrap | `forge_foundry.gd _end_run` | An aborted run (cancel, leaving, server shutdown) keeps its finished rows. Unfinished rows' cells ÷ 5 become scrap. | CANON rule, ADAPTED trigger |
-| Heat (0.19 start, rises per lock/clear, speeds gravity) | `forge_foundry.gd` | Console glow only | Not ported (no gameplay effect without the live run) |
+| Tetris Forge Foundry run (live falling-block play) | `forge_foundry.gd`, `tetromino_grid.gd` | **TETRAFORGE**: the same game, simulated on the server (`ForgeSession`) and rendered in a client ScreenGui plus the in-world 10×20 chamber | PORTED (Ryan, 2026-11-14: "real falling-block game like Godot") |
+| Grid 10×20; shapes I O T L J S Z with Godot's exact offsets; rotation (x,y)→(−y,x), O never rotates | `tetromino_grid.gd` | `TetrominoGrid.luau` (same 0-based coordinates; y=0 is the top) | CANON |
+| `fits` (walls/floor block, above-top allowed), `lock` (overflow if any cell is above the top; clear solid rows bottom-up with a per-row material tally; shift down) | `tetromino_grid.gd` | `TetrominoGrid.fits/lock` | CANON |
+| Spawn at (4,1), rotation 0; next-piece preview; uniform random piece | `forge_foundry.gd _spawn_piece/_random_shape` | `ForgeSession` with a server `Random` | CANON |
+| Rotation kicks 0, −1, +1, −2, +2 | `_rotate_piece` | `ForgeRules.ROTATION_KICKS` | CANON |
+| Hold (C): once per piece; first hold takes the next piece; the active piece keeps its materials | `_hold_piece` | `ForgeSession.hold` | CANON |
+| Soft drop ×0.11 interval; hard drop = fall then lock; pause (P) | `_process`, `_unhandled_input` | Same rules, driven by input intents. A pause auto-resumes after 30 s because the station is shared. | CANON + ADAPTED pause limit |
+| Gravity `max(0.09, 0.62·(1 − min(heat,1)·0.34))`; heat starts 0.19, +0.018 per lock, +0.07 per cleared row | `_process`, `_lock_piece` | `ForgeRules.gravityInterval`, server Heartbeat tick | CANON |
+| Pieces drawn from ore or salvage (whichever has ≥4 left); alloy piece [base, pure, base, pure] when alloy is enabled, ≥2 pure and ≥2 base remain, and a roll < 0.32 | `_choose_materials` | `ForgeRules.chooseMaterials` | CANON |
+| Alloy enabled when pure_component ≥ 4 | `inventory.gd get_foundry_config` | `enableAlloy = reserved pure ≥ 4` | CANON |
+| Feed budget = the whole workshop stock | `inventory.gd get_foundry_config` | Reserve min(stock, cap) with caps 120 ore / 56 salvage / 16 pure (= Godot starter stock), atomically, at session start | ADAPTED (shared multiplayer stock) |
+| Materials spent only when a piece locks (4 cells per piece) | `_lock_piece` | Same. The unlocked active piece is refunded. | CANON |
+| Each cleared row → 1 packed_block; ≥4 salvage cells → +stabilized_frame; ≥2 pure cells → +forged_blank (from the actual row contents) | `_lock_piece` | `ForgeRules.rowOutputs(tally)` | CANON |
+| Score += rows² × 100 per lock, +400 for a 4-row clear | `_lock_piece` | `ForgeRules.scoreForClear`, applied per real lock | CANON |
+| Run ends at the 8-row quota (`target_lines = 8`), chamber full, hoppers empty, material overflow, or Esc ("RETURN TO THE LOFT") | `_lock_piece`, `_spawn_piece`, `_end_run` | Same reasons. Backspace replaces Esc (Roblox reserves Esc). Extra host reasons: OPERATOR LEFT, OPERATOR LEFT THE CONSOLE, SERVER SHUTDOWN. | CANON + ADAPTED keys/reasons |
+| Leftover locked cells ÷ 5 → scrap at run end | `_end_run` | Same | CANON |
+| Result dictionary (win, score, materials_consumed, materials_produced, forge_heat, stats, station, reason) | `_end_run` | `ForgeSession.result` (same fields, camelCase) | CANON |
+| Receipt applied to the inventory (`apply_material_receipt`) | `world_seed.gd`, `inventory.gd deposit_from_minigame` | `WorkshopInventoryService.settleReservation`: refund unspent + add products + delete the reservation, in one atomic write. Abandoned reservations get a full refund after 5 min without a heartbeat. | ADAPTED (multiplayer-safe) |
+| One local player | — | One session per player, one chamber per station; watchers get the same snapshots; the in-world chamber mirrors the board | ADAPTED |
+| `MinigameInterface` (`start` / `minigame_finished(result)`) | `core/game_loop/minigame_interface.gd` | `ForgeSession.start` / `finished` + `result`. Engine-free, doesn't know about the inventory (same independence rule). | CANON contract |
 | `foundry_runs` counter | `world_seed.gd` | `foundryRuns` on the workshop record | CANON |
-| `MinigameInterface` (`start` / `minigame_finished(result)`) | `core/game_loop/minigame_interface.gd` | Planned for the live TETRAFORGE minigame. Results will go through `WorkshopInventoryService.transact` the way Godot uses `apply_material_receipt`. | PLANNED |
 | Stock exchange: 4 packed_block + 1 forged_blank → visor_chip_capacity +1 (K) | `inventory.gd make_mouse_visor_chip_upgrade` | `ExchangeService` | CANON |
 | `occupy_vertex` (spend 1 module) / `free_vertex` (recover 1:1; the `core` vertex can't be freed) | `world_seed.gd` | `LatticeService` sockets | CANON rules |
 | WorldSeed lattice growth (36 vertices, Delaunay, silhouette → tetra) | `worldseed/*` | Fixed 12-socket ring with gold joints | PLACEHOLDER (geometry not ported) |
@@ -41,10 +51,10 @@ Labels: **CANON** means copied exactly from the Godot code. **ADAPTED** means th
 | Quantum table | Owner lore (not in the Godot scene) | Table with a holo grid, virtual avatar and micronized android | Scenery; piloting PLANNED |
 | Gold superconductor lines | `module_types.gd`, gold_rail GLB | Neon gold floor lines and lattice joints | Scenery (no circuit logic, same as Godot) |
 | Unused keys `soil`, `food`, `labor_token`, `alloy`, `defense_tech` | `world_seed.gd` | Kept with the same names. Only soil has a source (Dig Dog), matching its dock label. | CANON |
-| No XP / levels in Godot | — | Per-player XP: forge score × 0.1, +2 per gather, +5 per socket. Level gates: Ore/Salvage rows L1, Alloy L2, Salvage Alloy L3. | **PLACEHOLDER** |
+| No XP / levels in Godot | — | Per-player XP: forge score × 0.1, +2 per gather, +5 per socket. Level gates were removed with the row recipes, so a level unlocks nothing yet. | **PLACEHOLDER** (pending Ryan) |
 | Audio: none in the build | — | `AudioDefs` slots: workshop + electronics bed, healing/ASMR tone layer (Ryan, 2026-11-14) | PLACEHOLDER ids |
 
 ## Explicitly not decided by canon (do not treat the Roblox choices as lore)
-- **What Tetris/TETRAFORGE "really does"** in the manufacturing chain is officially unsettled. That's Ryan's own note in the Nov 13 reconstruction. This port only reproduces what the Godot code already does.
+- **What Tetris/TETRAFORGE "really does"** in the manufacturing chain is officially unsettled. That's Ryan's own note in the Nov 13 reconstruction. This port only reproduces what the Godot code already does: the falling-block forge turning feed into packed blocks, frames and blanks.
 - The station order ASTER-ORES → BREAKDOWN → BUBBLE SORT → TETRAFORGE → DOGIEPRESS → DIG DOG is a **candidate** path from the Nov 14 handoff, not an implemented chain.
 - Durability-from-score (Tetris/Bejeweled) isn't in the Godot receipt, so it isn't here either.

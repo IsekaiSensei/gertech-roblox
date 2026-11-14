@@ -6,7 +6,7 @@ One Roblox experience made of several places. Players travel between them throug
 |---|---|---|---|
 | **Hub** (this place) | Workshop, TETRAFORGE, exchange, lattice, helix | ore/salvage/pure → packed_block, stabilized_frame, forged_blank, scrap | Aqua Workshop + Forge Foundry |
 | **Mining** | Dig Dog excavation and Aster-Ores breakup | → ore, soil, salvage, rock | DIG DOG and ASTEROIDS docks; ASTER-ORES / BREAKDOWN candidate stations |
-| **Forge** | The full live TETRAFORGE run (10×20 falling-block chamber, heat, hold, alloy pieces, 8-row quota) and later DOGIEPRESS (press / form / mount) | feed → crystallized rows; scrap from leftover cells | `forge_foundry.gd`, `tetromino_grid.gd`, `MinigameInterface`; DOGIEPRESS is PLANNED in design |
+| **Forge** | A floor with several TETRAFORGE chambers (the hub has one), and later DOGIEPRESS (press / form / mount) | feed → crystallized rows; scrap from leftover cells | `forge_foundry.gd`, `tetromino_grid.gd`, `MinigameInterface`; DOGIEPRESS is PLANNED in design |
 | **Assembly** | Grown-part sorting and assembly: coral/colony harvest → sort → assemble → test, plus the WorldSeed lattice at full scale | grown parts + packed blocks → assemblies | Chalk/biomineral manufacturing reconstruction (Nov 13); WorldSeed assemblies |
 | **Hangar** | Building and docking vehicles and units from assemblies | assemblies → vehicles/units | Saturn Astra modular cockpit design; poundage/mount limits (brainstorm §8) |
 | **Expeditions** | Missions that bring back salvage and rare stock. Gauntlet-style action is Ryan's stated reference for combat feel. | units → salvage, crystals | TO DoG handoff (Nov 14) |
@@ -14,7 +14,7 @@ One Roblox experience made of several places. Players travel between them throug
 ## Milestones
 1. **v0.1 (this commit).** Hub, timer-based TETRAFORGE, shared stock, gathering, exchange, lattice, helix hooks, saves.
 2. **v0.2.** First Studio play-test and fixes. Fill in `AudioDefs`. Add real models for the stations.
-3. **v0.3.** Live TETRAFORGE minigame on the client, with server-validated receipts: the server replays or validates piece locks against the stock it reserved. This replaces the timer for players who want to play the run.
+3. **v0.3 (done early, Nov 14).** The live TETRAFORGE: a server-simulated port of the Godot falling-block forge with atomic feed reservation and settlement. This replaced the timer batch.
 4. **v0.4.** Mining place, plus the helix teleport carrying `workshopId`. Private workshops: reserved servers keyed by `Workshop_<ownerUserId>`.
 5. **v0.5.** Assembly place: WorldSeed lattice growth, and the sorting minigame once Ryan defines it.
 6. **v0.6+.** Hangar and Expeditions. A cross-game backpack adapter, kept separate from the workshop save until the mapping is tested, per the Nov 14 handoff.
