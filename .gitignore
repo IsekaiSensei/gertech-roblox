@@ -5,3 +5,8 @@
 sourcemap.json
 roblox.yml
 /build
+# binaries live as base64 in assets/encoded (python3 tools/unpack_assets.py)
+/assets/refs/
+/assets/sheets/
+/assets/sky/
+/docs/preview_iso.png

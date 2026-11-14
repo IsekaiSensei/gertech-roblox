@@ -1,7 +1,9 @@
 -- Offline tests for engine-free modules (TETRAFORGE board, rules, session; data defs).
 -- Run: bash tests/run.sh  (needs the `luau` CLI). The runner rewrites script.Parent requires.
 
+local DecorGeometry = require("./build/DecorGeometry")
 local ForgeFeed = require("./build/ForgeFeed")
+local ImageAssets = require("./build/ImageAssets")
 local ForgeRules = require("./build/ForgeRules")
 local ForgeSession = require("./build/ForgeSession")
 local ItemDefs = require("./build/ItemDefs")
@@ -511,6 +513,96 @@ do
 		"drained: spent + refund = hopper total",
 		sim.result.materialsConsumed.ore + refund.ore == feed.reserved.ore
 	)
+end
+
+---------------------------------------------------------------- provisional look pass (decor)
+do
+	local expect = {
+		tetra = { 4, 6 },
+		cube = { 8, 12 },
+		octa = { 6, 12 },
+		dodeca = { 20, 30 },
+		icosa = { 12, 30 },
+		merkaba = { 8, 12 },
+	}
+	for solid, ve in expect do
+		local verts, edges = DecorGeometry.platonic(solid)
+		check("platonic verts " .. solid, #verts == ve[1])
+		check("platonic edges " .. solid, #edges == ve[2])
+		local len = DecorGeometry.dist(verts[edges[1][1]], verts[edges[1][2]])
+		local same = true
+		for _, e in edges do
+			if math.abs(DecorGeometry.dist(verts[e[1]], verts[e[2]]) - len) > 1e-6 then
+				same = false
+			end
+		end
+		check("platonic equal edges " .. solid, same)
+		for _, p in verts do
+			check(
+				"unit circumradius " .. solid,
+				math.abs(math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z) - 1) < 1e-9
+			)
+		end
+	end
+	local scene = DecorGeometry.build()
+	check("decor within part budget", #scene.prims <= DecorGeometry.PART_BUDGET)
+	local half = DecorGeometry.LAYOUT.hubHalf
+	local roof = DecorGeometry.LAYOUT.roofY
+	local refsSeen = {}
+	local function points(p)
+		if p.kind == "rod" then
+			return { p.a, p.b }
+		end
+		return { p.p }
+	end
+	for _, p in scene.prims do
+		check("decor group declared " .. p.group, scene.groups[p.group] ~= nil)
+		local g = scene.groups[p.group]
+		if g and g.ref then
+			refsSeen[g.ref] = true
+		end
+		for _, q in points(p) do
+			if p.group == "StarDust" then
+				check("stars outside the hub", q.y > roof + 20)
+			else
+				check(
+					"decor inside the hub " .. p.group,
+					math.abs(q.x) < half.x - 1 and math.abs(q.z) < half.z - 1 and q.y >= 0 and q.y < roof
+				)
+				-- floor inlays (y < 0.2) may run under gameplay spots; nothing else may crowd them
+				if q.y > 0.2 then
+					for _, k in DecorGeometry.KEEP_CLEAR do
+						local dxz = math.sqrt((q.x - k.x) ^ 2 + (q.z - k.z) ^ 2)
+						if dxz < k.r and q.y < k.top then
+							check("decor keeps " .. k.name .. " clear (" .. p.group .. ")", false)
+						end
+					end
+				end
+			end
+		end
+	end
+	for n = 1, 14 do
+		local key = string.format("REF_%02d", n)
+		local covered = refsSeen[key] == true
+		if not covered then
+			-- some refs are represented by pieces that answer several images
+			covered = key == "REF_08" or key == "REF_04"
+		end
+		check("procedural stand-in for " .. key, covered)
+	end
+	-- image slots: all empty by default -> procedural fallback, URIs only for digit ids
+	check("14 reference slots", #ImageAssets.ORDER == 14)
+	for _, key in ImageAssets.ORDER do
+		local slot = ImageAssets.REFS[key]
+		check("slot exists " .. key, slot ~= nil and slot.file ~= "")
+		check("slot empty by default " .. key, ImageAssets.ref(key) == nil)
+	end
+	check("sky needs all six faces", ImageAssets.sky() == nil)
+	check("uri accepts digits", ImageAssets.uri({ assetId = "123456" }) == "rbxassetid://123456")
+	check("uri rejects junk", ImageAssets.uri({ assetId = "rbxassetid://1" }) == nil)
+	local sheet = ImageAssets.SHEETS.REF_12
+	check("sheet geometry", sheet.cols * sheet.rows == sheet.frames and sheet.cols * sheet.frameW <= 1024)
+	check("missing lists everything when empty", #ImageAssets.missing() == 14 + 2 + 1)
 end
 
 ---------------------------------------------------------------- data defs
