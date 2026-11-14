@@ -7,11 +7,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Config = require(Shared:WaitForChild("Config"))
 local ItemDefs = require(Shared:WaitForChild("ItemDefs"))
 local RecipeDefs = require(Shared:WaitForChild("RecipeDefs"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Widgets = require(script.Parent:WaitForChild("UI"):WaitForChild("Widgets"))
+local ForgeView = require(script.Parent:WaitForChild("UI"):WaitForChild("ForgeView"))
 
 local T = Widgets.Theme
 local player = Players.LocalPlayer
@@ -25,10 +25,6 @@ local state = {
 	xp = 0,
 	levelXp = 0,
 	nextLevelXp = 100,
-	unlocked = {} :: { string },
-	forge = { active = false } :: any,
-	selectedRecipe = "ore_row",
-	rows = 1,
 }
 
 local gui = Widgets.new("ScreenGui", {
@@ -112,40 +108,8 @@ local function renderInventory()
 	invSub.Text = string.format("%s · forge runs %d", state.workshopId, state.foundryRuns)
 end
 
----------------------------------------------------------------- TETRAFORGE panel
-local forgePanel = Widgets.panel(
-	gui,
-	"Tetraforge",
-	UDim2.fromOffset(520, 420),
-	UDim2.fromScale(0.5, 0.5),
-	Vector2.new(0.5, 0.5)
-)
-forgePanel.Visible = false
-Widgets.text(
-	forgePanel,
-	"<b>TETRAFORGE</b>  ·  forge foundry",
-	UDim2.new(1, -60, 0, 28),
-	UDim2.fromOffset(14, 8),
-	{ TextSize = 22, TextColor3 = T.forge }
-)
-Widgets.text(
-	forgePanel,
-	"Each row = 10 cells. Spent from the SHARED workshop stock. Outputs return to it.",
-	UDim2.new(1, -28, 0, 18),
-	UDim2.fromOffset(14, 36),
-	{ TextSize = 12, TextColor3 = T.dim }
-)
-local closeForge = Widgets.button(forgePanel, "X", UDim2.fromOffset(30, 30), UDim2.new(1, -40, 0, 10), T.bad)
-local recipeList = Widgets.new("Frame", {
-	Size = UDim2.new(1, -28, 0, 220),
-	Position = UDim2.fromOffset(14, 60),
-	BackgroundTransparency = 1,
-	Parent = forgePanel,
-})
-Widgets.new(
-	"UIListLayout",
-	{ Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = recipeList }
-)
+---------------------------------------------------------------- TETRAFORGE
+local forgeView = ForgeView.new(gui)
 
 local function fmtMap(map: { [string]: number }, mult: number): string
 	local parts = {}
@@ -157,128 +121,6 @@ local function fmtMap(map: { [string]: number }, mult: number): string
 	end
 	return table.concat(parts, " + ")
 end
-
-local recipeButtons: { [string]: TextButton } = {}
-for i, id in RecipeDefs.ORDER do
-	local b = Widgets.button(recipeList, "", UDim2.new(1, 0, 0, 48), UDim2.new(), T.bg)
-	b.LayoutOrder = i
-	b.TextXAlignment = Enum.TextXAlignment.Left
-	b.TextColor3 = T.text
-	b.RichText = true
-	b.TextSize = 14
-	Widgets.new("UIPadding", { PaddingLeft = UDim.new(0, 10), Parent = b })
-	b.MouseButton1Click:Connect(function()
-		state.selectedRecipe = id
-	end)
-	recipeButtons[id] = b
-end
-
-local rowsLabel = Widgets.text(
-	forgePanel,
-	"",
-	UDim2.fromOffset(220, 30),
-	UDim2.fromOffset(60, 292),
-	{ TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center }
-)
-local minus = Widgets.button(forgePanel, "-", UDim2.fromOffset(36, 30), UDim2.fromOffset(14, 292))
-local plus = Widgets.button(forgePanel, "+", UDim2.fromOffset(36, 30), UDim2.fromOffset(290, 292))
-local costLabel = Widgets.text(
-	forgePanel,
-	"",
-	UDim2.new(1, -28, 0, 36),
-	UDim2.fromOffset(14, 326),
-	{ TextSize = 13, TextColor3 = T.dim }
-)
-local startBtn =
-	Widgets.button(forgePanel, "START RUN", UDim2.fromOffset(150, 36), UDim2.new(1, -164, 0, 288), T.forge)
-local progBack = Widgets.new("Frame", {
-	Size = UDim2.new(1, -150, 0, 18),
-	Position = UDim2.fromOffset(14, 380),
-	BackgroundColor3 = T.bg,
-	BorderSizePixel = 0,
-	Parent = forgePanel,
-})
-Widgets.corner(progBack, 6)
-local progFill = Widgets.new(
-	"Frame",
-	{ Size = UDim2.fromScale(0, 1), BackgroundColor3 = T.forge, BorderSizePixel = 0, Parent = progBack }
-)
-Widgets.corner(progFill, 6)
-local progText = Widgets.text(
-	progBack,
-	"Idle",
-	UDim2.fromScale(1, 1),
-	UDim2.new(),
-	{ TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center }
-)
-local cancelBtn =
-	Widgets.button(forgePanel, "ABORT", UDim2.fromOffset(110, 26), UDim2.new(1, -124, 0, 376), T.bad)
-
-local function isUnlocked(id: string): boolean
-	return table.find(state.unlocked, id) ~= nil
-end
-
-local function renderForge()
-	for id, b in recipeButtons do
-		local r = RecipeDefs.get(id) :: RecipeDefs.Recipe
-		local lock = if isUnlocked(id)
-			then ""
-			else string.format("  <font color='#ff8080'>[level %d]</font>", r.unlockLevel)
-		local alloy = if r.requiresAlloyEnabled
-			then "  <font color='#f4e4b2'>[alloy: needs 4+ Pure]</font>"
-			else ""
-		b.Text = string.format(
-			"<b>%s</b>%s%s\n<font size='12'>%s  →  %s</font>",
-			r.name,
-			lock,
-			alloy,
-			fmtMap(r.inputsPerRow, 1),
-			fmtMap(r.outputsPerRow, 1)
-		)
-		b.BackgroundColor3 = if id == state.selectedRecipe then Color3.fromRGB(60, 50, 30) else T.bg
-	end
-	local r = RecipeDefs.get(state.selectedRecipe) :: RecipeDefs.Recipe
-	rowsLabel.Text = string.format(
-		"%d row%s  (%ds)",
-		state.rows,
-		if state.rows == 1 then "" else "s",
-		state.rows * Config.FORGE_SECONDS_PER_ROW
-	)
-	local cost = RecipeDefs.scaled(r.inputsPerRow, state.rows)
-	local affordable = true
-	for k, n in cost do
-		if (state.inventory[k] or 0) < n then
-			affordable = false
-		end
-	end
-	costLabel.Text = string.format(
-		"Feed: %s\nOutput: %s  ·  score %d",
-		fmtMap(r.inputsPerRow, state.rows),
-		fmtMap(r.outputsPerRow, state.rows),
-		RecipeDefs.scoreForRows(state.rows)
-	)
-	costLabel.TextColor3 = if affordable then T.dim else T.bad
-	startBtn.Visible = not state.forge.active
-	cancelBtn.Visible = state.forge.active
-end
-
-minus.MouseButton1Click:Connect(function()
-	state.rows = math.max(1, state.rows - 1)
-	renderForge()
-end)
-plus.MouseButton1Click:Connect(function()
-	state.rows = math.min(Config.FORGE_MAX_ROWS_PER_RUN, state.rows + 1)
-	renderForge()
-end)
-startBtn.MouseButton1Click:Connect(function()
-	Remotes.event("StartCraft"):FireServer(state.selectedRecipe, state.rows)
-end)
-cancelBtn.MouseButton1Click:Connect(function()
-	Remotes.event("CancelCraft"):FireServer()
-end)
-closeForge.MouseButton1Click:Connect(function()
-	forgePanel.Visible = false
-end)
 
 ---------------------------------------------------------------- Exchange panel
 local exPanel = Widgets.panel(
@@ -355,30 +197,25 @@ local function applyWorkshop(payload: any)
 	state.foundryRuns = payload.foundryRuns or state.foundryRuns
 	state.workshopId = payload.workshopId or state.workshopId
 	renderInventory()
-	renderForge()
 end
 
 Remotes.event("InventoryUpdated").OnClientEvent:Connect(applyWorkshop)
 Remotes.event("ProgressionUpdated").OnClientEvent:Connect(function(p: any)
 	state.level, state.xp = p.level, p.xp
 	state.levelXp, state.nextLevelXp = p.levelXp, p.nextLevelXp
-	state.unlocked = p.unlockedRecipes or {}
 	xpLabel.Text = string.format("Level %d  ·  %d XP", state.level, state.xp)
 	local span = math.max(1, state.nextLevelXp - state.levelXp)
 	xpFill.Size = UDim2.fromScale(math.clamp((state.xp - state.levelXp) / span, 0, 1), 1)
-	renderForge()
 end)
-Remotes.event("ForgeState").OnClientEvent:Connect(function(s: any)
-	state.forge = s
-	renderForge()
-end)
-Remotes.event("OpenForge").OnClientEvent:Connect(function()
+Remotes.event("OpenForge").OnClientEvent:Connect(function(info: any)
 	exPanel.Visible = false
-	forgePanel.Visible = true
-	renderForge()
+	forgeView.open(info)
+end)
+Remotes.event("ForgeBoard").OnClientEvent:Connect(function(s: any, role: string)
+	forgeView.apply(s, role)
 end)
 Remotes.event("OpenExchange").OnClientEvent:Connect(function()
-	forgePanel.Visible = false
+	forgeView.close()
 	exPanel.Visible = true
 end)
 Remotes.event("Notify").OnClientEvent:Connect(function(text: string, kind: string?)
@@ -395,24 +232,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if input.KeyCode == Enum.KeyCode.I then
 		invPanel.Visible = not invPanel.Visible
 	elseif input.KeyCode == Enum.KeyCode.Escape then
-		forgePanel.Visible = false
-		exPanel.Visible = false
-	end
-end)
-
--- Progress bar ticker (display only; the server owns the real timer)
-task.spawn(function()
-	while true do
-		task.wait(0.1)
-		local f = state.forge
-		if f and f.active then
-			local t = math.clamp((workspace:GetServerTimeNow() - f.startedAt) / f.duration, 0, 1)
-			progFill.Size = UDim2.fromScale(t, 1)
-			local r = RecipeDefs.get(f.recipeId)
-			progText.Text = string.format("%s x%d  %d%%", r and r.name or "?", f.rows, math.floor(t * 100))
-		else
-			progFill.Size = UDim2.fromScale(0, 1)
-			progText.Text = "Idle"
+		if not forgeView.isOpen() then
+			exPanel.Visible = false
 		end
 	end
 end)
@@ -424,4 +245,3 @@ if ok and type(snap) == "table" then
 	applyWorkshop(snap.workshop)
 end
 renderInventory()
-renderForge()

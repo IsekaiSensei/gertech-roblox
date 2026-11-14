@@ -18,6 +18,8 @@ local HubBuilder = {}
 export type HubRefs = {
 	forgeConsole: BasePart,
 	forgePrompt: ProximityPrompt,
+	chamberCells: { { BasePart } },
+	chamberLabel: TextLabel,
 	exchange: BasePart,
 	exchangePrompt: ProximityPrompt,
 	sockets: { { part: BasePart, prompt: ProximityPrompt } },
@@ -222,33 +224,55 @@ local function buildTetraforge(refs: HubRefs)
 		Material = Enum.Material.Metal,
 		Parent = g,
 	})
-	-- 10 x 20 forge chamber (scaled), glass front with a few packed rows
+	-- 10 x 20 forge chamber: one Part per Godot grid cell; ForgeService mirrors the live
+	-- board into it so everyone in the hub can watch the run.
 	local chamber = part({
 		Name = "Chamber",
 		Size = Vector3.new(10.5, 20.5, 2),
 		CFrame = at(62, 11, 0) * CFrame.Angles(0, math.rad(-90), 0),
 		Color = Color3.fromRGB(30, 40, 60),
 		Material = Enum.Material.Glass,
-		Transparency = 0.4,
+		Transparency = 0.8,
 		Parent = g,
 	})
-	local colors = { Color3.fromHex("dfa55e"), Color3.fromHex("6dc6df"), Color3.fromHex("f4e4b2") }
-	for row = 0, 3 do
-		for col = 0, 9 do
-			if not (row == 3 and col > 5) then
-				local c = part({
-					Name = "Cell",
-					Size = Vector3.new(0.95, 0.95, 0.95),
-					CFrame = chamber.CFrame * CFrame.new(col - 4.5, row - 9.5, 0),
-					Color = colors[(row + col) % 3 + 1],
-					Material = Enum.Material.Neon,
-					Parent = g,
-				})
-				c.CanCollide = false
-			end
+	chamber.CanCollide = true
+	for y = 0, 19 do
+		local row = {}
+		for x = 0, 9 do
+			local c = part({
+				Name = string.format("Cell_%d_%d", x, y),
+				Size = Vector3.new(0.95, 0.95, 0.95),
+				-- Godot y = 0 is the top row
+				CFrame = chamber.CFrame * CFrame.new(x - 4.5, 9.5 - y, 0),
+				Color = Color3.fromRGB(30, 50, 70),
+				Material = Enum.Material.Neon,
+				Transparency = 0.92,
+				Parent = g,
+			})
+			c.CanCollide = false
+			c.CastShadow = false
+			row[x + 1] = c
 		end
+		refs.chamberCells[y + 1] = row
 	end
+	local status = Instance.new("BillboardGui")
+	status.Name = "ChamberStatus"
+	status.Size = UDim2.fromOffset(420, 40)
+	status.StudsOffset = Vector3.new(0, 12, 0)
+	status.MaxDistance = 120
+	local statusText = Instance.new("TextLabel")
+	statusText.Size = UDim2.fromScale(1, 1)
+	statusText.BackgroundTransparency = 1
+	statusText.Font = Enum.Font.GothamBold
+	statusText.TextScaled = true
+	statusText.TextColor3 = Color3.fromRGB(255, 200, 120)
+	statusText.TextStrokeTransparency = 0.4
+	statusText.Text = "TETRAFORGE"
+	statusText.Parent = status
+	status.Parent = chamber
+	refs.chamberLabel = statusText
 	-- Feed hoppers: ore / salvage / pure
+	local colors = { Color3.fromHex("dfa55e"), Color3.fromHex("6dc6df"), Color3.fromHex("f4e4b2") }
 	local hopperNames = { "ORE", "SALVAGE", "PURE" }
 	for i, name in hopperNames do
 		local h = part({
@@ -284,7 +308,7 @@ local function buildTetraforge(refs: HubRefs)
 	label(base, "TETRAFORGE", 14, Color3.fromRGB(255, 180, 90))
 	label(console, "Operator Console", 3)
 	refs.forgeConsole = console
-	refs.forgePrompt = prompt(console, "Operate", "TETRAFORGE")
+	refs.forgePrompt = prompt(console, "Operate / Watch", "TETRAFORGE")
 	refs.stationParts.tetraforge = console
 	-- Output conveyor
 	part({
@@ -781,6 +805,7 @@ function HubBuilder.build(): HubRefs
 	root.Name = "GERTECH_Hub"
 	root.Parent = workspace
 	local refs: HubRefs = {
+		chamberCells = {},
 		sockets = {},
 		nodes = {},
 		helixPads = {},

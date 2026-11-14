@@ -9,7 +9,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage.Shared
 local Config = require(Shared.Config)
 local ProgressionDefs = require(Shared.ProgressionDefs)
-local RecipeDefs = require(Shared.RecipeDefs)
 local Remotes = require(Shared.Remotes)
 local StoreUtil = require(script.Parent.StoreUtil)
 
@@ -19,7 +18,6 @@ export type Profile = {
 	version: number,
 	xp: number,
 	level: number,
-	unlockedRecipes: { string },
 	stats: { rowsForged: number, gathered: number, socketsPlaced: number },
 	sessionLock: { jobId: string, time: number }?,
 }
@@ -44,7 +42,6 @@ local function defaultProfile(): Profile
 		version = DATA_VERSION,
 		xp = 0,
 		level = 1,
-		unlockedRecipes = {},
 		stats = { rowsForged = 0, gathered = 0, socketsPlaced = 0 },
 		sessionLock = nil,
 	}
@@ -57,33 +54,12 @@ local function reconcile(data: any): Profile
 	end
 	p.xp = math.max(0, tonumber(data.xp) or 0)
 	p.level = ProgressionDefs.levelForXp(p.xp)
-	if type(data.unlockedRecipes) == "table" then
-		for _, id in data.unlockedRecipes do
-			if RecipeDefs.get(id) then
-				table.insert(p.unlockedRecipes, id)
-			end
-		end
-	end
 	if type(data.stats) == "table" then
 		for k in p.stats do
 			p.stats[k] = math.max(0, tonumber(data.stats[k]) or 0)
 		end
 	end
 	return p
-end
-
--- Unlock every recipe whose level gate is met (never removes an unlock).
-local function refreshUnlocks(p: Profile)
-	local have = {}
-	for _, id in p.unlockedRecipes do
-		have[id] = true
-	end
-	for _, id in RecipeDefs.ORDER do
-		local r = RecipeDefs.get(id)
-		if r and not have[id] and p.level >= r.unlockLevel then
-			table.insert(p.unlockedRecipes, id)
-		end
-	end
 end
 
 local function pushProgression(player: Player)
@@ -96,7 +72,6 @@ local function pushProgression(player: Player)
 		level = p.level,
 		nextLevelXp = ProgressionDefs.xpForLevel(p.level + 1),
 		levelXp = ProgressionDefs.xpForLevel(p.level),
-		unlockedRecipes = p.unlockedRecipes,
 		stats = p.stats,
 	})
 end
@@ -107,7 +82,6 @@ local function serialize(p: Profile): any
 		version = DATA_VERSION,
 		xp = p.xp,
 		level = p.level,
-		unlockedRecipes = table.clone(p.unlockedRecipes),
 		stats = table.clone(p.stats),
 	}
 end
@@ -187,14 +161,6 @@ function DataService.onProfileLoaded(cb: (Player, Profile) -> ())
 	table.insert(loadedCallbacks, cb)
 end
 
-function DataService.hasRecipe(player: Player, recipeId: string): boolean
-	local p = profiles[player]
-	if not p then
-		return false
-	end
-	return table.find(p.unlockedRecipes, recipeId) ~= nil
-end
-
 function DataService.addXp(player: Player, amount: number)
 	local p = profiles[player]
 	if not p or amount <= 0 then
@@ -203,11 +169,9 @@ function DataService.addXp(player: Player, amount: number)
 	local before = p.level
 	p.xp += math.floor(amount)
 	p.level = ProgressionDefs.levelForXp(p.xp)
-	refreshUnlocks(p)
 	dirty[player] = true
 	if p.level > before then
-		Remotes.event("Notify")
-			:FireClient(player, "Level " .. p.level .. "! New TETRAFORGE recipes may be unlocked.", "good")
+		Remotes.event("Notify"):FireClient(player, "Level " .. p.level .. "!", "good")
 	end
 	pushProgression(player)
 end
@@ -236,7 +200,6 @@ local function onPlayerAdded(player: Player)
 		profiles[player] = nil
 		return
 	end
-	refreshUnlocks(p)
 	profiles[player] = p
 	local ls = Instance.new("Folder")
 	ls.Name = "leaderstats"

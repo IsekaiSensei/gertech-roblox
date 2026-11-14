@@ -4,7 +4,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage.Shared
-local RecipeDefs = require(Shared.RecipeDefs)
 local Remotes = require(Shared.Remotes)
 
 local Services = script.Parent.Services
@@ -18,12 +17,6 @@ local PortalService = require(Services.PortalService)
 local AmbienceService = require(Services.AmbienceService)
 local HubBuilder = require(script.Parent.HubBuilder)
 
--- Fail fast if someone edits a recipe so it no longer follows the Godot row rules.
-for _, id in RecipeDefs.ORDER do
-	local ok, err = RecipeDefs.validateRowRules(RecipeDefs.get(id) :: RecipeDefs.Recipe)
-	assert(ok, "[GERTECH] RecipeDefs: " .. tostring(err))
-end
-
 local refs = HubBuilder.build()
 
 Inventory.start()
@@ -34,7 +27,7 @@ ExchangeService.start()
 LatticeService.start()
 PortalService.start()
 
-ForgeService.bindConsole(refs.forgeConsole, refs.forgePrompt)
+ForgeService.bindStation(refs.forgeConsole, refs.forgePrompt, refs.chamberCells, refs.chamberLabel)
 ExchangeService.bind(refs.exchange, refs.exchangePrompt)
 for i, s in refs.sockets do
 	LatticeService.bindSocket(i, s.part, s.prompt)
