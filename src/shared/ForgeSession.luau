@@ -5,6 +5,7 @@
 -- Engine-free: the server owns an instance; the RNG is injected (Random on Roblox).
 -- Rendering, input devices and inventory are NOT here (same independence rule as Godot).
 
+local ForgeFeed = require(script.Parent.ForgeFeed)
 local ForgeRules = require(script.Parent.ForgeRules)
 local TetrominoGrid = require(script.Parent.TetrominoGrid)
 
@@ -12,7 +13,8 @@ local ForgeSession = {}
 ForgeSession.__index = ForgeSession
 
 export type Config = {
-	inputs: { [string]: number }, -- reserved budget (ore / salvage / pure_component)
+	inputs: { [string]: number }?, -- Godot: fixed budget (ore / salvage / pure_component)
+	feed: ForgeFeed.Feed?, -- Roblox: live feed (whole shared stock via a reserved hopper)
 	enableAlloy: boolean,
 	targetLines: number?,
 	gravitySeconds: number?,
@@ -33,7 +35,10 @@ local function new(config: Config, rng: ForgeRules.Rng)
 	local self = {
 		grid = TetrominoGrid.new(),
 		rng = rng,
-		inputBudget = table.clone(config.inputs),
+		inputBudget = table.clone(config.inputs or {}),
+		feed = (config.feed or ForgeFeed.static(config.inputs or {})) :: any,
+		pendingMaterials = nil :: { string }?, -- chosen piece cells waiting for the hopper
+		waitingFeed = false,
 		alloyEnabled = config.enableAlloy,
 		targetLines = math.max(1, config.targetLines or ForgeRules.TARGET_LINES),
 		gravitySeconds = config.gravitySeconds or ForgeRules.GRAVITY_SECONDS,
@@ -80,13 +85,49 @@ end
 
 local endRun: (Session, string) -> ()
 
+local function remainingFeed(self: Session): { [string]: number }
+	local left = {}
+	for _, k in ForgeRules.FEED_MATERIALS do
+		left[k] = self.feed:remaining(k, self.materialSpent[k] or 0)
+	end
+	return left
+end
+
+local function obtainable(self: Session, materials: { string }): boolean
+	for k, n in ForgeFeed.counts(materials) do
+		if self.feed:remaining(k, self.materialSpent[k] or 0) < n then
+			return false
+		end
+	end
+	return true
+end
+
+-- CANON spawn order: choose materials, take the next shape, roll a new next shape.
+-- ADAPTED: if the chosen cells are not in the hopper yet, the spawn waits (no RNG is drawn
+-- again) until the host tops the hopper up. A static (Godot) feed never waits.
 local function spawnPiece(self: Session)
-	self.activeMaterials =
-		ForgeRules.chooseMaterials(self.inputBudget, self.materialSpent, self.alloyEnabled, self.rng)
-	if #self.activeMaterials == 0 then
-		endRun(self, "INPUT HOPPERS EMPTY")
+	local pending = self.pendingMaterials
+	local mats: { string }
+	if pending and obtainable(self, pending) then
+		mats = pending
+	else
+		-- (re)choose; a pending choice is dropped if others spent the shared stock meanwhile
+		mats = ForgeRules.chooseMaterials(remainingFeed(self), {}, self.alloyEnabled, self.rng)
+		if #mats == 0 then
+			self.pendingMaterials, self.waitingFeed = nil, false
+			self.activeMaterials = {}
+			endRun(self, "INPUT HOPPERS EMPTY")
+			return
+		end
+	end
+	if not self.feed:covers(mats, self.materialSpent) then
+		self.pendingMaterials, self.waitingFeed = mats, true
+		self.activeShape, self.activeMaterials = "", {}
+		self.status = "FEED HOPPER REFILLING"
 		return
 	end
+	self.pendingMaterials, self.waitingFeed = nil, false
+	self.activeMaterials = mats
 	self.activeShape = self.nextShape
 	self.nextShape = randomShape(self)
 	self.activeX, self.activeY = ForgeRules.SPAWN_X, ForgeRules.SPAWN_Y
@@ -107,7 +148,7 @@ function ForgeSession.start(self: Session)
 end
 
 local function canAct(self: Session): boolean
-	return self.running and not self.paused and not self.finished
+	return self.running and not self.paused and not self.finished and not self.waitingFeed
 end
 
 local function move(self: Session, dx: number, dy: number): boolean
@@ -295,6 +336,14 @@ function ForgeSession.update(self: Session, dt: number): boolean
 	end
 	local before = self.version
 	self.elapsed += dt
+	if self.waitingFeed then
+		spawnPiece(self)
+		if not self.waitingFeed then
+			self.gravityTimer = 0
+			touch(self)
+		end
+		return self.version ~= before
+	end
 	self.gravityTimer += dt
 	local interval = ForgeRules.gravityInterval(self.gravitySeconds, self.heat, self.softDrop)
 	if self.gravityTimer >= interval then
@@ -315,7 +364,8 @@ function ForgeSession.activeCells(self: Session): { TetrominoGrid.Point }
 	return TetrominoGrid.occupied(self.activeShape, self.activeRotation, self.activeX, self.activeY)
 end
 
--- Unspent part of the reservation (includes the active, not-yet-locked piece).
+-- Static (Godot) feed only: unspent part of the fixed budget, including the active,
+-- not-yet-locked piece. A hopper feed computes its own refund (ForgeFeed.hopper:refund).
 function ForgeSession.refund(self: Session): { [string]: number }
 	local out = {}
 	for _, k in ForgeRules.FEED_MATERIALS do
@@ -323,5 +373,8 @@ function ForgeSession.refund(self: Session): { [string]: number }
 	end
 	return out
 end
+
+-- Full instance type (fields + methods) for hosts; declared after every method exists.
+export type Instance = Session & typeof(ForgeSession)
 
 return ForgeSession

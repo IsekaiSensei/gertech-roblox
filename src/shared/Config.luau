@@ -29,6 +29,9 @@ Config.FORGE_INPUT_BURST = 30 -- input intents rate limit (token bucket)
 Config.FORGE_INPUT_PER_SECOND = 20
 Config.FORGE_OPERATOR_MAX_DISTANCE = 40 -- operator walking off ends the run
 
+Config.FORGE_TOPUP_MIN_INTERVAL = 2 -- seconds between routine hopper top-ups (DataStore budget)
+Config.FORGE_TOPUP_RETRY_SECONDS = 0.5 -- while a piece waits for feed
+
 -- Reservations older than this (no heartbeat from the owning server) are refunded in full.
 Config.RESERVATION_STALE_SECONDS = 300
 

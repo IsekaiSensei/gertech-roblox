@@ -29,10 +29,13 @@ ForgeRules.SCRAP_DIVISOR = 5
 ForgeRules.STABILIZED_FRAME_SALVAGE = 4 -- row with >= 4 salvage cells
 ForgeRules.FORGED_BLANK_PURE = 2 -- row with >= 2 pure_component cells
 
--- ADAPTED: Godot hands the whole workshop stock to the single-player foundry. In a shared
--- multiplayer workshop the session reserves at most this much, so one run cannot freeze
--- everyone else's stock. Caps equal the Godot starter stock (a full Godot run budget).
-ForgeRules.RESERVATION_CAP = { ore = 120, salvage = 56, pure_component = 16 }
+-- CANON: Godot hands the WHOLE workshop stock to the foundry and spends 4 cells per locked
+-- piece. ADAPTED for a shared multiplayer stock: a run draws from the whole stock, but
+-- only a small rolling "feed hopper" is held out of the shared stock at any moment. The
+-- hopper is reserved atomically and topped up from Workshop_Global as pieces lock, so other
+-- players and stations always see (and can spend) everything that is not in the hopper.
+ForgeRules.HOPPER_TARGET = { ore = 40, salvage = 40, pure_component = 12 } -- top up to this
+ForgeRules.HOPPER_LOW = { ore = 20, salvage = 20, pure_component = 6 } -- top up below this
 
 -- Replication codes (board string)
 ForgeRules.CODES = { ore = "o", salvage = "s", pure_component = "p" }
