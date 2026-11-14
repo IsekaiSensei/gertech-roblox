@@ -11,7 +11,7 @@ function Color3.fromHex(h) return { hex = h } end
 function Color3.new(r, g, b) return { r = r, g = g, b = b } end
 return Color3
 S
-for m in Config RecipeDefs ProgressionDefs ItemDefs; do
+for m in Config ForgeRules TetrominoGrid ForgeSession RecipeDefs ProgressionDefs ItemDefs; do
   { echo 'local Color3 = require("./_shim")'; sed -E 's#require\(script\.Parent\.([A-Za-z]+)\)#require("./\1")#' "../src/shared/$m.luau"; } > "build/$m.luau"
 done
 luau pure.spec.luau
