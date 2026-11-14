@@ -14,7 +14,7 @@ One Roblox experience made of several places. Players travel between them throug
 ## Milestones
 1. **v0.1 (this commit).** Hub, timer-based TETRAFORGE, shared stock, gathering, exchange, lattice, helix hooks, saves.
 2. **v0.2.** First Studio play-test and fixes. Fill in `AudioDefs`. Add real models for the stations.
-3. **v0.3 (done early, Nov 14).** The live TETRAFORGE: a server-simulated port of the Godot falling-block forge with atomic feed reservation and settlement. This replaced the timer batch.
+3. **v0.3 (done early, Nov 14).** The live TETRAFORGE: a server-simulated port of the Godot falling-block forge drawing on the whole shared stock through an atomically reserved, rolling feed hopper. This replaced the timer batch.
 4. **v0.4.** Mining place, plus the helix teleport carrying `workshopId`. Private workshops: reserved servers keyed by `Workshop_<ownerUserId>`.
 5. **v0.5.** Assembly place: WorldSeed lattice growth, and the sorting minigame once Ryan defines it.
 6. **v0.6+.** Hangar and Expeditions. A cross-game backpack adapter, kept separate from the workshop save until the mapping is tested, per the Nov 14 handoff.

@@ -44,7 +44,7 @@ In Studio, create the matching instances and paste each file's source:
 ## What's in the hub
 | Station | What it does | Status |
 |---|---|---|
-| **TETRAFORGE** (operator console + 10×20 chamber) | The real falling-block forge, ported from Godot. Pieces are made from ore, salvage and pure components reserved from the shared stock. Cleared rows crystallize into packed blocks, stabilized frames and forged blanks. A run ends at 8 rows. Leftover cells ÷ 5 become scrap. One operator at a time; anyone can watch, either in the panel or on the in-world chamber. | Playable (server-simulated) |
+| **TETRAFORGE** (operator console + 10×20 chamber) | The real falling-block forge, ported from Godot. Pieces are made from ore, salvage and pure components drawn from the whole shared stock through a small atomically reserved feed hopper. Cleared rows crystallize into packed blocks, stabilized frames and forged blanks. A run ends at 8 rows. Leftover cells ÷ 5 become scrap. One operator at a time; anyone can watch, either in the panel or on the in-world chamber. | Playable (server-simulated) |
 | Intake docks: **Dig Dog** ore seams, **Asteroids** salvage rocks, **Breakout** refined-parts bins | Hold to gather into the shared stock. Nodes deplete and regrow. | Playable (stand-in for minigames that aren't built yet) |
 | **Stock Exchange** | 4 Packed Blocks + 1 Forged Blank → workshop Visor Chip capacity +1 | Playable (canon) |
 | **WorldSeed lattice** (12 sockets, gold joints) | Place a Packed Block into a socket, or recover it 1:1. The core socket can't be recovered. | Playable (canon rules, placeholder size) |
@@ -78,7 +78,7 @@ ServerScriptService.Server    (src/server)
     StoreUtil                 DataStore retries + in-memory fallback
     DataService               per-player profile: session-locked UpdateAsync, autosave, release on leave
     WorkshopInventoryService  SHARED stock: one key per workshop, atomic spends, batched adds, MessagingService sync
-    ForgeService              TETRAFORGE: server sim per session, input intents, snapshots, watchers, chamber mirror, reserve/settle
+    ForgeService              TETRAFORGE: server sim per session, input intents, snapshots, watchers, chamber mirror, feed hopper reserve/top-up/settle
     GatherService             resource nodes
     ExchangeService           visor chip upgrade
     LatticeService            WorldSeed-lite sockets
@@ -94,7 +94,14 @@ StarterPlayerScripts.Client   (src/client)
 
 **Server authority.** The server owns the TETRAFORGE board, the piece RNG and the gravity tick, running `ForgeSession` on Heartbeat. The client sends only `ForgeStart()`, input intents through `ForgeInput(intent)` (`left`, `right`, `rotate`, `soft_on`/`soft_off`, `hard`, `hold`, `pause`/`resume`, `end`), `ForgeWatch(bool)` and `BuyUpgrade(id)`. Intents are whitelisted and rate-limited (30 burst, 20/s). Only the operator's intents count. The server sends board snapshots (a 200-character board string plus the active piece) at most 20 times a second to the operator and watchers. The client interpolates the falling piece between snapshots. Other server rules: one session per player and one chamber per station. A pause auto-resumes after 30 s. The run ends if the operator walks more than 40 studs from the console.
 
-**TETRAFORGE material safety.** Starting a run reserves feed in one atomic `UpdateAsync`: min(stock, cap) of ore, salvage and pure. The caps are 120/56/16, the Godot starter stock. The same write records the reservation inside the workshop. When the run ends, for any reason (quota, chamber full, hoppers empty, overflow, Backspace, leaving, walking off, server shutdown), one atomic write does three things: refunds the unspent feed (including the active piece, which isn't locked yet), adds the products and deletes the reservation. While a run is live, its server heartbeats the reservation every 20 s. If a server crashes, any other server refunds a reservation that hasn't been heartbeated for 5 minutes, in full. A late settle finds the reservation gone and grants nothing. Materials are never duplicated, and they're only lost if they were locked into a run that never settled. In that case the full refund returns them too.
+**TETRAFORGE material safety (whole shared stock, like Godot).** A run can use the whole workshop stock. Only a small rolling **feed hopper** is held out of the shared stock at a time: up to 40 ore, 40 salvage and 12 pure.
+- **Start.** One atomic `UpdateAsync` moves the first hopper fill out of the stock and records it as the session's reservation, in the same write.
+- **Choosing pieces.** Pieces are picked with Godot's `_choose_materials`. It sees the whole stock: unspent hopper plus the unreserved shared stock.
+- **Spending.** A piece spends its 4 cells on lock, as in Godot, and always from the hopper. It only spawns once its cells are in the hopper, so no two players can spend the same ore.
+- **Top-ups.** When any kind drops below its low mark (20/20/6), the server tops the hopper up with another atomic write. That write adds to the reservation and subtracts from the stock together, at most every 2 s. A piece whose cells haven't arrived waits (status `FEED HOPPER REFILLING`). The 2 s spacing respects the DataStore limit of one write per key every 6 s.
+- **Everyone else.** Gathering, other stations and other servers keep using everything outside the hopper. Material gathered mid-run feeds the run too.
+- **End of run.** Whatever the reason (quota, chamber full, hoppers empty, overflow, Backspace, leaving, walking off, server shutdown), one atomic write refunds the unspent hopper (including the active piece), adds the products and deletes the reservation. Settlement waits for any top-up still in flight.
+- **Crashes.** While a run is live, its server heartbeats the reservation. Any other server refunds a reservation that hasn't been heartbeated for 5 minutes, in full. A late settle or top-up finds the reservation gone: the settle grants nothing, and the run ends with `FEED LINE LOST`. Materials are never duplicated or lost.
 
 **Shared inventory concurrency.** Gathering and forge output pile up in a per-server `pending` delta, which is committed every 20 s or on the next transaction. Spends run the check and the subtraction inside `UpdateAsync`, against the freshest stored copy with the pending adds applied. After each commit the server publishes `{workshopId, revision}`, and other servers re-read. A periodic re-read covers dropped messages. If the store fails, pending adds are put back so nothing gathered is lost.
 
@@ -106,7 +113,10 @@ StarterPlayerScripts.Client   (src/client)
 - `stylua --check src`
 - `luau-compile` parses every file.
 - `luau-lsp analyze --definitions=globalTypes.d.luau --sourcemap=sourcemap.json src` (Roblox API types, sourcemap from `rojo sourcemap`): 0 type errors.
-- `bash tests/run.sh`: offline tests (2,938 checks). They cover the board port (shapes, rotation, fits, locking, single and four-row clears, overflow), Godot formulas (score, row outputs, scrap, gravity, alloy material choice), session behavior (spawn, gravity, hold, pause, hoppers-empty end, refunds), a scripted 8-row quota run, and 200 seeded random runs. The random runs check conservation, refund + spent = budget, and that the score matches the Godot formula.
+- `bash tests/run.sh`: offline tests (5,421 checks). They cover the board port (shapes, rotation, fits, locking, single and four-row clears, overflow), Godot formulas (score, row outputs, scrap, gravity, alloy material choice), session behavior (spawn, gravity, hold, pause, hoppers-empty end, refunds), a scripted 8-row quota run, and 200 seeded random runs. The random runs check conservation, refund + spent = budget, and that the score matches the Godot formula. Hopper-feed tests:
+  - 60 seeded runs play identically to a Godot whole-stock budget: same pieces, board, score and outputs. Every step checks that shared + hopper + spent = initial stock.
+  - A run of more than 3,000 cells drains a large stock without the hopper ever holding more than its target.
+  - A slow top-up makes the next piece wait. A stock drained by someone else ends the run cleanly.
 
 These are static checks plus engine-free tests. **This code hasn't been run in Roblox Studio yet.** The first Studio Play session is the next verification step.
 
