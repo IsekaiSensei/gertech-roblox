@@ -35,4 +35,9 @@ Config.FORGE_TOPUP_RETRY_SECONDS = 0.5 -- while a piece waits for feed
 -- Reservations older than this (no heartbeat from the owning server) are refunded in full.
 Config.RESERVATION_STALE_SECONDS = 300
 
+-- PROVISIONAL look pass toward Ryan's shared reference images (not canon, no gameplay):
+-- "refs_2026_11_14" = space / gold / chrome / cyan decor (VisualStyle); "classic" = the
+-- original aqua-workshop colors only.
+Config.VISUAL_STYLE = "refs_2026_11_14"
+
 return Config
