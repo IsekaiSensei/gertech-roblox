@@ -16,8 +16,10 @@ local LatticeService = require(Services.LatticeService)
 local PortalService = require(Services.PortalService)
 local AmbienceService = require(Services.AmbienceService)
 local HubBuilder = require(script.Parent.HubBuilder)
+local VisualStyle = require(script.Parent.VisualStyle)
 
 local refs = HubBuilder.build()
+VisualStyle.apply(workspace:WaitForChild("GERTECH_Hub")) -- provisional look only
 
 Inventory.start()
 DataService.start()

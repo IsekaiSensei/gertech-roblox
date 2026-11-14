@@ -22,12 +22,13 @@
     "Lighting": {
       "$properties": {
         "Ambient": [
-          0.1,
-          0.18,
-          0.25
+          0.13,
+          0.15,
+          0.2
         ],
-        "Brightness": 1.5,
-        "ClockTime": 14
+        "Brightness": 1,
+        "ClockTime": 0,
+        "Technology": "Future"
       }
     }
   }

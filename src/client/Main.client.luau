@@ -12,6 +12,7 @@ local RecipeDefs = require(Shared:WaitForChild("RecipeDefs"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Widgets = require(script.Parent:WaitForChild("UI"):WaitForChild("Widgets"))
 local ForgeView = require(script.Parent:WaitForChild("UI"):WaitForChild("ForgeView"))
+local DecorFx = require(script.Parent:WaitForChild("DecorFx"))
 
 local T = Widgets.Theme
 local player = Players.LocalPlayer
@@ -245,3 +246,5 @@ if ok and type(snap) == "table" then
 	applyWorkshop(snap.workshop)
 end
 renderInventory()
+
+DecorFx.start() -- provisional look pass: decor spins + flipbooks (visual only)
