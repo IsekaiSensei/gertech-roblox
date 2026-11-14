@@ -1,0 +1,34 @@
+{
+  "name": "gertech-roblox",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Ambient": [
+          0.1,
+          0.18,
+          0.25
+        ],
+        "Brightness": 1.5,
+        "ClockTime": 14
+      }
+    }
+  }
+}
